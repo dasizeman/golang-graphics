@@ -47,6 +47,15 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 	return newBuffer
 }
 
+// WritePixel writes a pixel color to the buffer, assuming (0,0) is the
+//bottom-left corner
+func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
+
+	// We will reverse the y origin for compatibility with XPM output
+	frameBuffer.buffer[frameBuffer.Height-y][x] = color
+
+}
+
 /* Scene */
 
 // Scene is a virtual space that can be rendered to a frame buffer
@@ -217,6 +226,33 @@ type XPMFile struct {
 	writer   *bufio.Writer
 }
 
+func OpenXPMFile(path string) (*XPMFile, error) {
+	fp, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	writer := bufio.NewWriter(fp)
+
+	file := &XPMFile{
+		filePath: path,
+		handle:   fp,
+		writer:   writer}
+
+	file.XPMFileFormatStr =
+		"/* XPM */" +
+			"static char *sco100[] = {" +
+			"/* width height num_colors chars_per_pixel */" +
+			"\"%d %d %d %d\"" +
+			"/* colors */" +
+			"%s" +
+			"/* pixels */" +
+			"%s" +
+			"};"
+
+	return file, err
+}
+
 func (file *XPMFile) WriteSoftBuffer(buffer *SoftFrameBuffer) {
 
 }
@@ -254,4 +290,8 @@ func getCwd() string {
 		log.Fatal(err)
 	}
 	return dir
+}
+
+func GenerateHexString(color RGBColor) string {
+	return ""
 }
