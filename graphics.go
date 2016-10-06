@@ -134,19 +134,38 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	qx, qy, rx, ry := line.Unpack()
 
 	var independentCoord, dependentCoord *int
-	var decider func() int
+	var decider func(int, int) int
+	var length, dependentSign int
+
+	black := RGBColor{0, 0, 0}
 
 	dx := rx - qx
 	dy := ry - qy
+	fmt.Printf("%d\n", dx)
+	fmt.Printf("%d\n", dy)
 
-	m := float64(dy / dx)
+	m := float64(dy) / float64(dx)
+
+	fmt.Printf("%f\n", m)
 
 	decisionConstantTerm := func() int {
 		return 2 * (rx*dy - ry*dx)
 	}
 
-	caseOneDecider := func() int {
+	caseOneDecider := func(x, y int) int {
+		return (-2*x-2)*dy + (2*y+1)*dx
+	}
 
+	caseTwoDecider := func(x, y int) int {
+		return (-2*x-1)*dy + (2*y+2)*dx
+	}
+
+	caseThreeDecider := func(x, y int) int {
+		return (-2*x+1)*dy + (2*y+2)*dx
+	}
+
+	caseFourDecider := func(x, y int) int {
+		return (2*x+2)*dy + (-2*y+1)*dx
 	}
 
 	// Use Bresenham's algorithm
@@ -154,14 +173,93 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	// Case 2: m > 1
 	// Case 3: m < -1
 	// Case 4: -1 < m < 0
-	if m > 0 && m < 1 {
+	if m > 0 && m <= 1 {
+		fmt.Printf("Case one\n")
+		// Incrementing x, swap points if needed
+		if dx < 0 {
+			swap(&qx, &rx)
+			swap(&qy, &ry)
+			fmt.Printf("Swap!\n")
+			dx *= -1
+			dy *= -1
+		}
+		//fmt.Printf("%d %d %d %d\n", qx, qy, rx, ry)
+		independentCoord = &qx
+		dependentCoord = &qy
+		decider = caseOneDecider
+		length = rx - qx
+
+		// y might increase
+		dependentSign = 1
 
 	} else if m > 1 {
+		fmt.Printf("Case two\n")
+		// Incrementing y, swap points if needed
+		if dy < 0 {
+			swap(&qx, &rx)
+			swap(&qy, &ry)
+			fmt.Printf("Swap!\n")
+			dx *= -1
+			dy *= -1
+		}
+		independentCoord = &qy
+		dependentCoord = &qx
+		decider = caseTwoDecider
+		length = ry - qy
 
+		// x might increase
+		dependentSign = 1
 	} else if m < -1 {
+		fmt.Printf("Case three\n")
+		// Incrementing y, swap points if needed
+		if dy < 0 {
+			swap(&qx, &rx)
+			swap(&qy, &ry)
+			fmt.Printf("Swap!\n")
+			dx *= -1
+			dy *= -1
+		}
+		independentCoord = &qy
+		dependentCoord = &qx
+		decider = caseThreeDecider
+		length = ry - qy
 
-	} else if m > -1 && m < 0 {
+		// x might decrease
+		dependentSign = -1
+	} else if m >= -1 && m < 0 {
+		fmt.Printf("Case four\n")
+		// Incrementing x, swap points if needed
+		if dx < 0 {
+			swap(&qx, &rx)
+			swap(&qy, &ry)
+			fmt.Printf("Swap!\n")
+			dx *= -1
+			dy *= -1
+		}
+		independentCoord = &qx
+		dependentCoord = &qy
+		decider = caseFourDecider
+		length = rx - qx
 
+		// y might decrease
+		dependentSign = -1
+	}
+
+	c := decisionConstantTerm()
+
+	for i := 0; i < length; i++ {
+
+		// Write the current pixel
+		//fmt.Printf("[%d,%d]\n", qx, qy)
+		buffer.WritePixel(qx, qy, black)
+
+		d := decider(qx, qy) + c
+		fmt.Printf("D: %d\n", d)
+		if d < 0 {
+			(*dependentCoord) += dependentSign
+		}
+
+		(*independentCoord)++
 	}
 
 }
@@ -266,12 +364,18 @@ func OpenPostScriptFile(path string) (*PostScriptFile, error) {
 func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 	var objects []Drawable
-	// Check if the first line is the begin delimiter
-	scanner := file.scanner
-	scanner.Scan()
-	line := scanner.Text()
 	var err error
-	if line != file.BeginDelim {
+	foundBegin := false
+
+	scanner := file.scanner
+	for !foundBegin && scanner.Scan() {
+		line := scanner.Text()
+		file.lineIdx++
+		if line == file.BeginDelim {
+			foundBegin = true
+		}
+	}
+	if !foundBegin {
 		err := errors.New("PostScript file did not have the correct BEGIN" +
 			" delimiter\n")
 		return objects, err
@@ -280,7 +384,7 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 	file.lineIdx++
 
 	for scanner.Scan() {
-		line = scanner.Text()
+		line := scanner.Text()
 
 		if line == file.EndDelim {
 			break
