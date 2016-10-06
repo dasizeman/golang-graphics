@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -133,135 +134,61 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	// Unpack the line
 	qx, qy, rx, ry := line.Unpack()
 
-	var independentCoord, dependentCoord *int
-	var decider func(int, int) int
-	var length, dependentSign int
+	var x, y, start, end int
+	var dy, dx, fx, fy float64
 
 	black := RGBColor{0, 0, 0}
 
-	dx := rx - qx
-	dy := ry - qy
-	fmt.Printf("%d\n", dx)
-	fmt.Printf("%d\n", dy)
+	m := float64(ry-qy) / float64(rx-qx)
 
-	m := float64(dy) / float64(dx)
-
-	fmt.Printf("%f\n", m)
-
-	decisionConstantTerm := func() int {
-		return 2 * (rx*dy - ry*dx)
-	}
-
-	caseOneDecider := func(x, y int) int {
-		return (-2*x-2)*dy + (2*y+1)*dx
-	}
-
-	caseTwoDecider := func(x, y int) int {
-		return (-2*x-1)*dy + (2*y+2)*dx
-	}
-
-	caseThreeDecider := func(x, y int) int {
-		return (-2*x+1)*dy + (2*y+2)*dx
-	}
-
-	caseFourDecider := func(x, y int) int {
-		return (2*x+2)*dy + (-2*y+1)*dx
-	}
-
-	// Use Bresenham's algorithm
-	// Case 1: 0 < m < 1
-	// Case 2: m > 1
-	// Case 3: m < -1
-	// Case 4: -1 < m < 0
-	if m > 0 && m <= 1 {
-		fmt.Printf("Case one\n")
-		// Incrementing x, swap points if needed
-		if dx < 0 {
-			swap(&qx, &rx)
-			swap(&qy, &ry)
-			fmt.Printf("Swap!\n")
-			dx *= -1
-			dy *= -1
-		}
-		//fmt.Printf("%d %d %d %d\n", qx, qy, rx, ry)
-		independentCoord = &qx
-		dependentCoord = &qy
-		decider = caseOneDecider
-		length = rx - qx
-
-		// y might increase
-		dependentSign = 1
-
-	} else if m > 1 {
-		fmt.Printf("Case two\n")
-		// Incrementing y, swap points if needed
-		if dy < 0 {
-			swap(&qx, &rx)
-			swap(&qy, &ry)
-			fmt.Printf("Swap!\n")
-			dx *= -1
-			dy *= -1
-		}
-		independentCoord = &qy
-		dependentCoord = &qx
-		decider = caseTwoDecider
-		length = ry - qy
-
-		// x might increase
-		dependentSign = 1
-	} else if m < -1 {
-		fmt.Printf("Case three\n")
-		// Incrementing y, swap points if needed
-		if dy < 0 {
-			swap(&qx, &rx)
-			swap(&qy, &ry)
-			fmt.Printf("Swap!\n")
-			dx *= -1
-			dy *= -1
-		}
-		independentCoord = &qy
-		dependentCoord = &qx
-		decider = caseThreeDecider
-		length = ry - qy
-
-		// x might decrease
-		dependentSign = -1
-	} else if m >= -1 && m < 0 {
-		fmt.Printf("Case four\n")
-		// Incrementing x, swap points if needed
-		if dx < 0 {
-			swap(&qx, &rx)
-			swap(&qy, &ry)
-			fmt.Printf("Swap!\n")
-			dx *= -1
-			dy *= -1
-		}
-		independentCoord = &qx
-		dependentCoord = &qy
-		decider = caseFourDecider
-		length = rx - qx
-
-		// y might decrease
-		dependentSign = -1
-	}
-
-	c := decisionConstantTerm()
-
-	for i := 0; i < length; i++ {
-
-		// Write the current pixel
-		//fmt.Printf("[%d,%d]\n", qx, qy)
-		buffer.WritePixel(qx, qy, black)
-
-		d := decider(qx, qy) + c
-		fmt.Printf("D: %d\n", d)
-		if d < 0 {
-			(*dependentCoord) += dependentSign
+	if math.Abs(m) < 1 {
+		dx = 1.0
+		dy = m
+		if qx <= rx {
+			x = qx
+			y = qy
+			start = qx
+			end = rx
+		} else {
+			x = rx
+			y = ry
+			start = rx
+			end = qx
 		}
 
-		(*independentCoord)++
+	} else {
+		dx = 1 / m
+		dy = 1.0
+		if qy <= ry {
+			x = qx
+			y = qy
+			start = qy
+			end = ry
+		} else {
+			x = rx
+			y = ry
+			start = ry
+			end = qy
+		}
 	}
 
+	fx = float64(x)
+	fy = float64(y)
+	for i := start; i <= end; i++ {
+		buffer.WritePixel(round(fx), round(fy), black)
+
+		fx = fx + dx
+		fy = fy + dy
+	}
+
+}
+
+func round(f float64) int {
+	dec := f - math.Floor(f)
+	if dec >= 0.5 {
+		return int(f + 1)
+	}
+	return int(f)
 }
 
 func (line *Line) Unpack() (qx, qy, rx, ry int) {
@@ -450,10 +377,8 @@ type XPMFile struct {
 }
 
 func OpenXPMFile(path string) (*XPMFile, error) {
-	fp, err := os.Create(path)
-	if err != nil {
-		return nil, err
-	}
+	//fp, err := os.Create(path)
+	fp := os.Stdout
 
 	writer := bufio.NewWriter(fp)
 
