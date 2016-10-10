@@ -115,10 +115,12 @@ func (vertex *Vertex) String() string {
 
 // Line is a line
 type Line struct {
-	a, b *Vertex
+	a, b              *Vertex
+	clippingAlgorithm func(*Line)
 }
 
 func (line *Line) clip(buffer *SoftFrameBuffer) {
+	line.clippingAlgorithm(line)
 
 }
 
@@ -189,6 +191,38 @@ func round(f float64) int {
 		return int(f + 1)
 	}
 	return int(f)
+}
+
+func (line *Line) cohenSutherlandClip() {
+	//aCode := line.a.getCSBitcode()
+	//bCode := line.b.getCSBitcode()
+	//ax, ay, bx, by := line.Unpack()
+}
+
+func (vertex *Vertex) getCSBitcode() int {
+	westCode := 1
+	eastCode := 2
+	southCode := 4
+	northCode := 8
+
+	code := 0
+
+	x := vertex.attributes[0]
+	y := vertex.attributes[1]
+
+	if x < 0 {
+		code |= westCode
+	} else if x > 0 {
+		code |= eastCode
+	}
+
+	if y < 0 {
+		code |= southCode
+	} else if y > 0 {
+		code |= northCode
+	}
+
+	return code
 }
 
 func (line *Line) Unpack() (qx, qy, rx, ry int) {
@@ -379,6 +413,7 @@ type XPMFile struct {
 func OpenXPMFile(path string) (*XPMFile, error) {
 	//fp, err := os.Create(path)
 	fp := os.Stdout
+	err := errors.New("")
 
 	writer := bufio.NewWriter(fp)
 
@@ -454,7 +489,7 @@ func parseLineObject(tokens []string) Drawable {
 	b.AddAttribute(float64(points[2]))
 	b.AddAttribute(float64(points[3]))
 
-	return &Line{a, b}
+	return &Line{a, b, (*Line).cohenSutherlandClip}
 
 }
 
