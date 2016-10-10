@@ -116,11 +116,11 @@ func (vertex *Vertex) String() string {
 // Line is a line
 type Line struct {
 	a, b              *Vertex
-	clippingAlgorithm func(*Line)
+	clippingAlgorithm func(*Line, int, int)
 }
 
 func (line *Line) clip(buffer *SoftFrameBuffer) {
-	line.clippingAlgorithm(line)
+	line.clippingAlgorithm(line, buffer.Width, buffer.Height)
 
 }
 
@@ -134,7 +134,7 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	}
 
 	// Unpack the line
-	qx, qy, rx, ry := line.Unpack()
+	qx, qy, rx, ry := line.UnpackInt()
 
 	var x, y, start, end int
 	var dy, dx, fx, fy float64
@@ -193,17 +193,73 @@ func round(f float64) int {
 	return int(f)
 }
 
-func (line *Line) cohenSutherlandClip() {
-	//aCode := line.a.getCSBitcode()
-	//bCode := line.b.getCSBitcode()
-	//ax, ay, bx, by := line.Unpack()
+const (
+	csWest  int = 1
+	csEast  int = 2
+	csSouth int = 4
+	csNorth int = 8
+)
+
+func (line *Line) cohenSutherlandClip(width, height int) {
+	aCode := line.a.getCSBitcode()
+	bCode := line.b.getCSBitcode()
+	x0, y0, x1, y1 := line.UnpackFloat()
+
+	// Line completely out
+	if aCode&bCode != 0 {
+		return
+	}
+
+	for aCode|bCode != 0 {
+		// Find the first bit flip
+		bitIdx := 1
+		for aCode&bitIdx == bCode&bitIdx {
+			bitIdx = bitIdx << 1
+		}
+
+		// "Fix" this flip by clipping a coordinate
+		var clippedVertex *Vertex
+		var xc, yc int
+		switch bitIdx {
+		case csWest:
+			xc = 0
+			yc = round(findYC(x0, x1, y0, y1, 0))
+			clippedVertex = minX(line.a, line.b)
+
+		case csEast:
+			xc = width
+			yc = round(findYC(x0, x1, y0, y1, float64(width)))
+			clippedVertex = maxX(line.a, line.b)
+
+		case csSouth:
+			yc = 0
+			xc = round(findXC(x0, x1, y0, y1, 0))
+			clippedVertex = minY(line.a, line.b)
+
+		case csNorth:
+			yc = height
+			xc = round(findXC(x0, x1, y0, y1, float64(height)))
+			clippedVertex = maxY(line.a, line.b)
+		}
+
+		clippedVertex.attributes[0] = float64(xc)
+		clippedVertex.attributes[1] = float64(yc)
+
+		// Recalculate bitcodes
+		aCode = line.a.getCSBitcode()
+		bCode = line.b.getCSBitcode()
+	}
+}
+
+func findYC(x0, x1, y0, y1, clip float64) float64 {
+	return ((x0-clip)/(x1-x0))*(y0-y1) + y1
+}
+
+func findXC(x0, x1, y0, y1, clip float64) float64 {
+	return ((y1-clip)/(y1-y0))*(x0-x1) + x1
 }
 
 func (vertex *Vertex) getCSBitcode() int {
-	westCode := 1
-	eastCode := 2
-	southCode := 4
-	northCode := 8
 
 	code := 0
 
@@ -211,25 +267,36 @@ func (vertex *Vertex) getCSBitcode() int {
 	y := vertex.attributes[1]
 
 	if x < 0 {
-		code |= westCode
+		code |= csWest
 	} else if x > 0 {
-		code |= eastCode
+		code |= csEast
 	}
 
 	if y < 0 {
-		code |= southCode
+		code |= csSouth
 	} else if y > 0 {
-		code |= northCode
+		code |= csNorth
 	}
 
 	return code
 }
 
-func (line *Line) Unpack() (qx, qy, rx, ry int) {
+// UnpackInt returns this line's vertex coordinates as a sequence of integers
+func (line *Line) UnpackInt() (qx, qy, rx, ry int) {
 	qx = int(line.a.attributes[0])
 	qy = int(line.a.attributes[1])
 	rx = int(line.b.attributes[0])
 	ry = int(line.b.attributes[1])
+
+	return
+}
+
+// UnpackFloat returns this line's vertex coordinates as a sequence of floats
+func (line *Line) UnpackFloat() (qx, qy, rx, ry float64) {
+	qx = line.a.attributes[0]
+	qy = line.a.attributes[1]
+	rx = line.b.attributes[0]
+	ry = line.b.attributes[1]
 
 	return
 }
@@ -240,7 +307,7 @@ func (line *Line) handleEdgeCases(buffer *SoftFrameBuffer) bool {
 	handled := false
 	black := RGBColor{0, 0, 0}
 
-	qx, qy, rx, ry := line.Unpack()
+	qx, qy, rx, ry := line.UnpackInt()
 
 	// Just a single point
 	if qx == rx && qy == ry {
@@ -410,6 +477,7 @@ type XPMFile struct {
 	writer   *bufio.Writer
 }
 
+// OpenXPMFile opens a new XPM file for writing
 func OpenXPMFile(path string) (*XPMFile, error) {
 	//fp, err := os.Create(path)
 	fp := os.Stdout
@@ -441,7 +509,7 @@ func (file *XPMFile) WriteSoftBuffer(buffer *SoftFrameBuffer) error {
 	// Build the color list string
 	var colorList string
 	for k, v := range buffer.colors {
-		colorList += fmt.Sprintf("\"%s c #%s\",\n", v, GenerateHexString(k))
+		colorList += fmt.Sprintf("\"%s c #%s\",\n", v, k.GenerateHexString())
 	}
 
 	// Build the rows string
@@ -489,7 +557,12 @@ func parseLineObject(tokens []string) Drawable {
 	b.AddAttribute(float64(points[2]))
 	b.AddAttribute(float64(points[3]))
 
-	return &Line{a, b, (*Line).cohenSutherlandClip}
+	res := &Line{
+		a:                 a,
+		b:                 b,
+		clippingAlgorithm: (*Line).cohenSutherlandClip}
+
+	return res
 
 }
 
@@ -503,6 +576,39 @@ func getCwd() string {
 	return dir
 }
 
-func GenerateHexString(color RGBColor) string {
+// GenerateHexString returns the hex string for this color
+func (color RGBColor) GenerateHexString() string {
 	return fmt.Sprintf("%02x%02x%02x", color.R, color.G, color.B)
+}
+
+func minX(a, b *Vertex) *Vertex {
+	if a.attributes[0] < b.attributes[0] {
+		return a
+	}
+
+	return b
+}
+
+func minY(a, b *Vertex) *Vertex {
+	if a.attributes[1] < b.attributes[1] {
+		return a
+	}
+
+	return b
+}
+
+func maxX(a, b *Vertex) *Vertex {
+	if a.attributes[0] >= b.attributes[0] {
+		return a
+	}
+
+	return b
+}
+
+func maxY(a, b *Vertex) *Vertex {
+	if a.attributes[1] >= b.attributes[1] {
+		return a
+	}
+
+	return b
 }
