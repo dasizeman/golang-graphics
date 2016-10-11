@@ -17,7 +17,7 @@ import (
 // Drawable is some kind of geometry that can be rasterized to a frame buffer
 type Drawable interface {
 	Draw(buffer *SoftFrameBuffer)
-	clip(buffer *SoftFrameBuffer)
+	clip(buffer *SoftFrameBuffer) bool
 }
 
 /* ----Structures---- */
@@ -60,8 +60,8 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 	}
 
 	// Set the buffer to white
-	for y := 0; y < newBuffer.Height; y++ {
-		for x := 0; x < newBuffer.Width; x++ {
+	for y := 0; y <= newBuffer.Height; y++ {
+		for x := 0; x <= newBuffer.Width; x++ {
 			newBuffer.WritePixel(x, y, white)
 		}
 	}
@@ -74,7 +74,7 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 
 	// We will reverse the y origin for compatibility with XPM output
-	frameBuffer.buffer[frameBuffer.Height-y-1][x] = color
+	frameBuffer.buffer[frameBuffer.Height-y][x] = color
 
 	// Add this to our set of colors
 	//frameBuffer.colors[color] = GenerateHexString(color)
@@ -116,18 +116,28 @@ func (vertex *Vertex) String() string {
 // Line is a line
 type Line struct {
 	a, b              *Vertex
-	clippingAlgorithm func(*Line, int, int)
+	clippingAlgorithm func(*Line, int, int) bool
 }
 
-func (line *Line) clip(buffer *SoftFrameBuffer) {
-	line.clippingAlgorithm(line, buffer.Width, buffer.Height)
+func (line *Line) clip(buffer *SoftFrameBuffer) bool {
+	return line.clippingAlgorithm(line, buffer.Width, buffer.Height)
+}
 
+// Print prints the points in this line for debugging
+func (line *Line) Print() {
+	x0, y0, x1, y1 := line.UnpackFloat()
+	fmt.Printf("[%f,%f]\n[%f,%f]\n", x0, y0, x1, y1)
 }
 
 // Draw draws the line to the buffer
 func (line *Line) Draw(buffer *SoftFrameBuffer) {
 
-	line.clip(buffer)
+	// Our clipper has reported that the line is completely outside the buffer
+	if !line.clip(buffer) {
+		return
+	}
+
+	line.Print()
 
 	if line.handleEdgeCases(buffer) {
 		return
@@ -200,14 +210,14 @@ const (
 	csNorth int = 8
 )
 
-func (line *Line) cohenSutherlandClip(width, height int) {
-	aCode := line.a.getCSBitcode()
-	bCode := line.b.getCSBitcode()
+func (line *Line) cohenSutherlandClip(width, height int) bool {
+	aCode := line.a.getCSBitcode(width, height)
+	bCode := line.b.getCSBitcode(width, height)
 	x0, y0, x1, y1 := line.UnpackFloat()
 
 	// Line completely out
 	if aCode&bCode != 0 {
-		return
+		return false
 	}
 
 	for aCode|bCode != 0 {
@@ -246,20 +256,22 @@ func (line *Line) cohenSutherlandClip(width, height int) {
 		clippedVertex.attributes[1] = float64(yc)
 
 		// Recalculate bitcodes
-		aCode = line.a.getCSBitcode()
-		bCode = line.b.getCSBitcode()
+		aCode = line.a.getCSBitcode(width, height)
+		bCode = line.b.getCSBitcode(width, height)
 	}
+
+	return true
 }
 
 func findYC(x0, x1, y0, y1, clip float64) float64 {
-	return ((x0-clip)/(x1-x0))*(y0-y1) + y1
+	return ((clip-x0)/(x1-x0))*(y1-y0) + y0
 }
 
 func findXC(x0, x1, y0, y1, clip float64) float64 {
 	return ((y1-clip)/(y1-y0))*(x0-x1) + x1
 }
 
-func (vertex *Vertex) getCSBitcode() int {
+func (vertex *Vertex) getCSBitcode(width, height int) int {
 
 	code := 0
 
@@ -268,13 +280,13 @@ func (vertex *Vertex) getCSBitcode() int {
 
 	if x < 0 {
 		code |= csWest
-	} else if x > 0 {
+	} else if x > float64(width) {
 		code |= csEast
 	}
 
 	if y < 0 {
 		code |= csSouth
-	} else if y > 0 {
+	} else if y > float64(height) {
 		code |= csNorth
 	}
 
