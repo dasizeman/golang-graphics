@@ -137,8 +137,6 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 		return
 	}
 
-	line.Print()
-
 	if line.handleEdgeCases(buffer) {
 		return
 	}
