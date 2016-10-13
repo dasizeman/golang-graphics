@@ -2,6 +2,7 @@ package graphics
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -523,22 +524,22 @@ func (file *XPMFile) WriteSoftBuffer(buffer *SoftFrameBuffer) error {
 	}
 
 	// Build the rows string
-	var rowsList string
+	var rowsList bytes.Buffer
 	for y := 0; y < buffer.Height; y++ {
-		rowsList += "\""
+		rowsList.WriteString("\"")
 		for x := 0; x < buffer.Width; x++ {
-			rowsList += buffer.colors[buffer.buffer[y][x]]
+			rowsList.WriteString(buffer.colors[buffer.buffer[y][x]])
 		}
-		rowsList += "\""
+		rowsList.WriteString("\"")
 		if y != buffer.Height-1 {
-			rowsList += ","
+			rowsList.WriteString(",")
 		}
-		rowsList += "\n"
+		rowsList.WriteString("\n")
 	}
 
 	// Put it all together
 	fileStr := fmt.Sprintf(file.XPMFileFormatStr, buffer.Width,
-		buffer.Height, len(buffer.colors), 1, colorList, rowsList)
+		buffer.Height, len(buffer.colors), 1, colorList, rowsList.String())
 
 	_, err := file.writer.WriteString(fileStr)
 	file.writer.Flush()
