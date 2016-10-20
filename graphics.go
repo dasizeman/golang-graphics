@@ -569,6 +569,7 @@ func (geo *Geometry) Print() {
 func parsePolygonObject(lines []string) ([]*Geometry, error) {
 	var res []*Geometry
 	toAdd := &Geometry{}
+	toAdd.clippingFunc = (*Geometry).sutherlandHodgemanClip
 	polygonFinished := true
 	failed := false
 	for _, line := range lines {
