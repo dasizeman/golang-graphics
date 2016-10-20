@@ -482,36 +482,89 @@ func (geo *Geometry) clip(buffer *SoftFrameBuffer) bool {
 }
 
 func (geo *Geometry) sutherlandHodgemanClip(width int, height int) {
-	// Test intersection logic
-	a1 := &Vertex{}
-	a1.AddAttribute(0)
-	a1.AddAttribute(0)
 
-	a2 := &Vertex{}
-	a2.AddAttribute(10)
-	a2.AddAttribute(0)
+	// Our input points for this clipping edge
+	v := geo.vertices
+	vprime := []*Vertex{}
+	fheight := float64(height)
+	fwidth := float64(width)
 
-	destLine := &Line{a: a1, b: a2}
+	// TL
+	tl := &Vertex{}
+	tl.AddAttribute(0)
+	tl.AddAttribute(fheight)
 
-	b1 := &Vertex{}
-	b1.AddAttribute(-1)
-	b1.AddAttribute(-5)
+	// TR
+	tr := &Vertex{}
+	tr.AddAttribute(fwidth)
+	tr.AddAttribute(fheight)
 
-	b2 := &Vertex{}
-	b2.AddAttribute(5)
-	b2.AddAttribute(5)
+	// BL
+	bl := &Vertex{}
+	bl.AddAttribute(0)
+	bl.AddAttribute(0)
 
-	sourceLine := &Line{a: b1, b: b2}
+	// BR
+	br := &Vertex{}
+	br.AddAttribute(fwidth)
+	br.AddAttribute(0)
 
-	fmt.Printf("Source:\n")
-	sourceLine.Print()
+	corners := []*Vertex{tl, tr, br, bl}
 
-	fmt.Printf("Dest line:\n")
-	destLine.Print()
+	northInside := func(vertex *Vertex) bool {
+		return vertex.attributes[1] <= fheight
+	}
 
-	intersection := findIntersection(sourceLine, destLine)
-	fmt.Printf("Intersection:\n")
-	intersection.Print()
+	eastInside := func(vertex *Vertex) bool {
+		return vertex.attributes[0] <= fwidth
+	}
+
+	southInside := func(vertex *Vertex) bool {
+		return vertex.attributes[1] >= 0
+	}
+
+	westInside := func(vertex *Vertex) bool {
+		return vertex.attributes[0] >= 0
+	}
+
+	insideCheckers := []func(*Vertex) bool{northInside, eastInside,
+		southInside, westInside}
+
+	// Go through each clipping edge
+	cornerIdx := 0
+	var clippingEdge *Line
+	for _, checker := range insideCheckers {
+		// Set the clipping edge line
+		if cornerIdx == 3 { // Last side (west)
+			clippingEdge = &Line{a: corners[cornerIdx], b: corners[0]} // Wrap
+		} else {
+			clippingEdge = &Line{a: corners[cornerIdx], b: corners[cornerIdx+1]}
+		}
+
+		// Check if each vertex is inside the edge and clip it to its side's
+		// intersection if not
+		for i := 0; i < len(v)-1; i++ {
+			side := &Line{a: v[i], b: v[i+1]}
+			intersection := findIntersection(side, clippingEdge)
+
+			if checker(side.a) && !checker(side.b) {
+				vprime = append(vprime, side.a)
+				vprime = append(vprime, intersection)
+			} else if !checker(side.a) && checker(side.b) {
+				vprime = append(vprime, intersection)
+				vprime = append(vprime, side.b)
+			} else if checker(side.a) && checker(side.b) {
+				vprime = append(vprime, side.a)
+				vprime = append(vprime, side.b)
+			}
+		}
+		cornerIdx++
+		v = vprime
+		vprime = []*Vertex{}
+	}
+
+	// Update the polygon
+	geo.vertices = v
 
 }
 
@@ -589,7 +642,8 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 			}
 			res = append(res, toAdd)
 			polygonFinished = true
-			toAdd := &Geometry{}
+			toAdd = &Geometry{}
+			toAdd.vertices = nil
 			toAdd.clippingFunc = (*Geometry).sutherlandHodgemanClip
 			continue
 		}
@@ -718,7 +772,8 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 		tokens := strings.Split(line, " ")
 
 		// Skip blank lines
-		if len(tokens) <= 0 {
+		if line == "" {
+			file.lineIdx++
 			continue
 		}
 
@@ -728,6 +783,7 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 		_, polygonDelimFound := file.PolygonDelims[delim]
 		if polygonDelimFound {
 			polygonLines = append(polygonLines, line)
+			file.lineIdx++
 			continue
 		}
 
