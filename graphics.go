@@ -127,6 +127,73 @@ func (vertex *Vertex) Equal(other *Vertex) bool {
 	return true
 }
 
+// All of these vector operations expect two Vertices of
+// the same dimension
+
+// Magnitude returns the vector magnitude of this vertex
+func (vertex *Vertex) Magnitude() float64 {
+	squareSum := 0.0
+	for _, attribute := range vertex.attributes {
+		squareSum += math.Pow(attribute, 2)
+	}
+
+	return math.Sqrt(squareSum)
+}
+
+// Normalized returns the normalized vector of this vertex
+func (vertex *Vertex) Normalized() *Vertex {
+	res := &Vertex{}
+	magnitude := vertex.Magnitude()
+	for _, attribute := range vertex.attributes {
+		res.AddAttribute(attribute / magnitude)
+	}
+
+	return res
+}
+
+// TwoDNormal returns the normalized vector normal to the 2D vertex
+func (vertex *Vertex) TwoDNormal() *Vertex {
+	normalized := vertex.Normalized()
+	res := &Vertex{}
+
+	// x = y
+	// y = -x
+	res.AddAttribute(normalized.attributes[1])
+	res.AddAttribute(-1 * normalized.attributes[0])
+
+	return res
+}
+
+// VAdd vector adds two Vertices
+func VAdd(a, b *Vertex) *Vertex {
+	res := &Vertex{}
+	for i := 0; i < len(a.attributes); i++ {
+		res.AddAttribute(a.attributes[i] + b.attributes[i])
+	}
+
+	return res
+}
+
+// VScale Vector scales vertex by factor
+func VScale(vertex *Vertex, factor float64) *Vertex {
+	res := &Vertex{}
+	for _, attribute := range vertex.attributes {
+		res.AddAttribute(attribute * factor)
+	}
+
+	return res
+}
+
+// VDot returns the vector dot product of the vertices
+func VDot(a, b *Vertex) float64 {
+	sum := 0.0
+	for i := 0; i < len(a.attributes); i++ {
+		sum += a.attributes[i] * b.attributes[i]
+	}
+
+	return sum
+}
+
 // Print prints this vertex
 func (vertex *Vertex) Print() {
 	fmt.Printf("(")
@@ -410,11 +477,80 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 }
 
 func (geo *Geometry) clip(buffer *SoftFrameBuffer) bool {
-	//geo.clippingFunc(geo, buffer.Width, buffer.Height)
+	geo.clippingFunc(geo, buffer.Width, buffer.Height)
 	return true
 }
 
 func (geo *Geometry) sutherlandHodgemanClip(width int, height int) {
+	// Test intersection logic
+	a1 := &Vertex{}
+	a1.AddAttribute(0)
+	a1.AddAttribute(0)
+
+	a2 := &Vertex{}
+	a2.AddAttribute(10)
+	a2.AddAttribute(0)
+
+	destLine := &Line{a: a1, b: a2}
+
+	b1 := &Vertex{}
+	b1.AddAttribute(-1)
+	b1.AddAttribute(-5)
+
+	b2 := &Vertex{}
+	b2.AddAttribute(5)
+	b2.AddAttribute(5)
+
+	sourceLine := &Line{a: b1, b: b2}
+
+	fmt.Printf("Source:\n")
+	sourceLine.Print()
+
+	fmt.Printf("Dest line:\n")
+	destLine.Print()
+
+	intersection := findIntersection(sourceLine, destLine)
+	fmt.Printf("Intersection:\n")
+	intersection.Print()
+
+}
+
+func findIntersection(source, target *Line) *Vertex {
+	//var x, y int
+
+	// First we will calculate/store a few points/vectors we need for
+	// computation
+
+	P0 := source.a
+	P1 := source.b
+	T0 := target.a
+	T1 := target.b
+
+	// We need the vector form of our source line (P1-P0)
+	D := VAdd(P1, VScale(P0, -1))
+	T := VAdd(T1, VScale(T0, -1))
+
+	// We need an endpoint of our target line
+	Pe := target.a
+
+	// And we need the normal vector to our target line
+	N := T.TwoDNormal()
+
+	// We use the parametric form of our source line, P(t) = P0 + tD
+	// and assume P(t) is on the target line.  This would have to satisfy
+	// N dot [P(t) - Pe] = 0, since the dot product of a segment and its
+	// normal is always zero.  We can solve for the parameter t for the
+	// intersection, if any.  The line actually intersects iff 0 <= t <= 1,
+	// in which case we plug t back into P(t) to get the intersection point.
+	// Yay math!  The formula we use to get t is just an algebraic manipulation
+	// of the above equation to solve for t.
+
+	M := VAdd(P0, VScale(Pe, -1))
+
+	t := -1 * (VDot(N, M) / VDot(N, D))
+
+	// P(t) = P0 + tD
+	return VAdd(P0, VScale(D, t))
 
 }
 
@@ -633,7 +769,6 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 		}
 		for _, polygon := range polygons {
 			objects = append(objects, polygon)
-			polygon.Print()
 		}
 	}
 
