@@ -112,6 +112,30 @@ func (vertex *Vertex) String() string {
 	return fmt.Sprintf("%v", vertex.attributes)
 }
 
+// Equal checks if this Vertex is equal to another Vertex
+func (vertex *Vertex) Equal(other *Vertex) bool {
+	if len(vertex.attributes) != len(other.attributes) {
+		return false
+	}
+
+	for i := 0; i < len(vertex.attributes); i++ {
+		if vertex.attributes[i] != other.attributes[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Print prints this vertex
+func (vertex *Vertex) Print() {
+	fmt.Printf("(")
+	for _, attr := range vertex.attributes {
+		fmt.Printf("%f,", attr)
+	}
+	fmt.Printf(")\n")
+}
+
 /* Line */
 
 // Line is a line
@@ -360,12 +384,132 @@ func swap(a, b *int) {
 	*b = temp
 }
 
+/* Geometry */
+
+// Geometry is some geometric form, comprised of vertices
+type Geometry struct {
+	vertices     []*Vertex
+	clippingFunc func(*Geometry, int, int)
+}
+
+// Draw draws this Geometry to the provided buffer
+func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
+	//TODO
+	geo.clip(buffer)
+
+	// Draw the lines formws by the points of the geometry
+	for i := 0; i < len(geo.vertices)-1; i++ {
+		line := &Line{
+			a:                 geo.vertices[i],
+			b:                 geo.vertices[i+1],
+			clippingAlgorithm: (*Line).cohenSutherlandClip}
+
+		line.Draw(buffer)
+	}
+
+}
+
+func (geo *Geometry) clip(buffer *SoftFrameBuffer) bool {
+	//geo.clippingFunc(geo, buffer.Width, buffer.Height)
+	return true
+}
+
+func (geo *Geometry) sutherlandHodgemanClip(width int, height int) {
+
+}
+
+// AddVertex adds a vertex to the geometry
+func (geo *Geometry) AddVertex(vertex *Vertex) {
+	geo.vertices = append(geo.vertices, vertex)
+}
+
+// Print prints the points in this Geometry
+func (geo *Geometry) Print() {
+	for _, vertex := range geo.vertices {
+		vertex.Print()
+	}
+}
+
+func parsePolygonObject(lines []string) ([]*Geometry, error) {
+	var res []*Geometry
+	toAdd := &Geometry{}
+	polygonFinished := true
+	failed := false
+	for _, line := range lines {
+		tokens := strings.Split(line, " ")
+		delim := tokens[len(tokens)-1]
+
+		// A new polygon must begin with a moveto command
+		if polygonFinished && delim != "moveto" {
+			failed = true
+			break
+		}
+
+		if delim == "stroke" {
+			// Final point and first point must be the same
+			if !toAdd.vertices[0].Equal(toAdd.vertices[len(toAdd.vertices)-1]) {
+				return nil, errors.New("Detected unclosed polygon")
+			}
+			res = append(res, toAdd)
+			polygonFinished = true
+			toAdd := &Geometry{}
+			toAdd.clippingFunc = (*Geometry).sutherlandHodgemanClip
+			continue
+		}
+
+		polygonFinished = false
+
+		if !(delim == "moveto" || delim == "lineto") {
+			failed = true
+			break
+		}
+
+		coordStrs := tokens[:len(tokens)-1]
+
+		// We need exactly two coordinates in every
+		// polygon line
+		if len(coordStrs) != 2 {
+			failed = true
+			break
+		}
+
+		// Add the current point
+		xCoord, err := strconv.Atoi(coordStrs[0])
+		if err != nil {
+			failed = true
+		}
+
+		yCoord, err := strconv.Atoi(coordStrs[1])
+		if err != nil {
+			failed = true
+		}
+
+		point := &Vertex{}
+		point.AddAttribute(float64(xCoord))
+		point.AddAttribute(float64(yCoord))
+
+		toAdd.AddVertex(point)
+
+	}
+
+	if failed {
+		return nil, errors.New("Failed parsing a polygon\n")
+	}
+
+	if !polygonFinished {
+		return nil, errors.New("Detected incomplete polygon specification\n")
+	}
+
+	return res, nil
+}
+
 /* PostScriptFile */
 
 // PostScriptFile is a wrapper for a PostScript format specification of a scene
 type PostScriptFile struct {
 	// String "constants"
 	BeginDelim, EndDelim, LineDelim string
+	PolygonDelims                   map[string]bool
 
 	filePath string
 	handle   *os.File
@@ -393,7 +537,10 @@ func OpenPostScriptFile(path string) (*PostScriptFile, error) {
 	file.BeginDelim = "%%%BEGIN"
 	file.EndDelim = "%%%END"
 	file.LineDelim = "Line"
-
+	file.PolygonDelims = make(map[string]bool)
+	file.PolygonDelims["moveto"] = true
+	file.PolygonDelims["lineto"] = true
+	file.PolygonDelims["stroke"] = true
 	file.lineIdx = 1
 
 	return file, err
@@ -403,7 +550,6 @@ func OpenPostScriptFile(path string) (*PostScriptFile, error) {
 func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 	var objects []Drawable
-	var err error
 	foundBegin := false
 
 	scanner := file.scanner
@@ -422,6 +568,9 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 	file.lineIdx++
 
+	// This contains all of the groups of lines we find that define a Polygon
+	var polygonLines []string
+
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -438,6 +587,14 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 		delim := tokens[len(tokens)-1]
 
+		// Polygons
+		_, polygonDelimFound := file.PolygonDelims[delim]
+		if polygonDelimFound {
+			polygonLines = append(polygonLines, line)
+			continue
+		}
+
+		// Single line objects
 		switch delim {
 		case file.LineDelim:
 			object := parseLineObject(tokens[:len(tokens)-1])
@@ -456,7 +613,6 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 				fmt.Printf("Parsed object %#v\n", line)
 				fmt.Printf("%s\n%s\n", line.a.String(), line.b.String())
 			*/
-			file.lineIdx++
 
 		default:
 			errStr := fmt.Sprintf("Unrecognized object delimiter %s on line"+
@@ -466,9 +622,22 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 		}
 
+		file.lineIdx++
+
 	}
 
-	return objects, err
+	if len(polygonLines) > 0 {
+		polygons, err := parsePolygonObject(polygonLines)
+		if err != nil {
+			return objects, err
+		}
+		for _, polygon := range polygons {
+			objects = append(objects, polygon)
+			polygon.Print()
+		}
+	}
+
+	return objects, nil
 
 }
 
