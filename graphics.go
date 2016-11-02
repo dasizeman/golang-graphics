@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -101,6 +102,15 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 // Vertex is a vertex with attributes
 type Vertex struct {
 	attributes []float64
+}
+
+// Create2DVertex creates a vertex with the specified x and y coordinates
+func Create2DVertex(a, b float64) *Vertex {
+	// TODO use this where we create 2D vertices
+	result := &Vertex{}
+	result.AddAttribute(a)
+	result.AddAttribute(b)
+	return result
 }
 
 // AddAttribute adds an attribute to vertex
@@ -209,6 +219,17 @@ func (vertex *Vertex) Print() {
 type Line struct {
 	a, b              *Vertex
 	clippingAlgorithm func(*Line, int, int) bool
+}
+
+// CreateLine creates a line with the specified vertices and
+// a default clipping algorithm
+func CreateLine(a, b *Vertex) *Line {
+	//TODO use this where we make lines
+	result := &Line{}
+	result.a = a
+	result.b = b
+	result.clippingAlgorithm = (*Line).cohenSutherlandClip
+	return result
 }
 
 func (line *Line) clip(buffer *SoftFrameBuffer) bool {
@@ -456,6 +477,7 @@ func swap(a, b *int) {
 // Geometry is some geometric form, comprised of vertices
 type Geometry struct {
 	vertices     []*Vertex
+	lines        []*Line
 	clippingFunc func(*Geometry, int, int)
 }
 
@@ -465,6 +487,7 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 	geo.clip(buffer)
 
 	// Draw the lines formws by the points of the geometry
+
 	for i := 0; i < len(geo.vertices)-1; i++ {
 		line := &Line{
 			a:                 geo.vertices[i],
@@ -473,6 +496,16 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 
 		line.Draw(buffer)
 	}
+
+	/*
+		for _, line := range geo.lines {
+			line.Draw(buffer)
+		}
+	*/
+
+	// TODO adapt for 3D
+	// Fill the geometry with black
+	geo.scanFill(buffer, RGBColor{0, 0, 0})
 
 }
 
@@ -603,7 +636,11 @@ func findIntersection(source, target *Line) *Vertex {
 	t := -1 * (VDot(N, M) / VDot(N, D))
 
 	// P(t) = P0 + tD
-	return VAdd(P0, VScale(D, t))
+
+	if t >= 0 && t <= 1 {
+		return VAdd(P0, VScale(D, t))
+	}
+	return nil
 
 }
 
@@ -617,6 +654,100 @@ func (geo *Geometry) Print() {
 	for _, vertex := range geo.vertices {
 		vertex.Print()
 	}
+}
+
+// scanFill fills the Geometry with the scan technique.  Only meant for 2D
+// geometry
+func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
+	extremas := &XSortedVertexSlice{}
+	// Scan every row in the buffer
+	for lineY := 1; lineY <= buffer.Height; lineY++ {
+		scanLine := CreateLine(Create2DVertex(0, float64(lineY)),
+			Create2DVertex(float64(buffer.Width), float64(lineY)))
+
+		// Clear the extrema list
+		extremas.values = nil
+
+		// Go through each edge
+		for _, edge := range geo.lines {
+			if !isEdgeValid(edge, lineY) {
+				continue
+			}
+
+			// Find the intersection point of the scan line and this edge
+			intersection := findIntersection(edge, scanLine)
+
+			// No intersection
+			if intersection == nil {
+				continue
+			}
+			extremas.values =
+				append(extremas.values, intersection)
+		}
+
+		// No extremas for this scan line
+		if len(extremas.values) == 0 {
+			continue
+		}
+
+		// Sort extremas by X value
+		sort.Sort(extremas)
+
+		// Scan over the line
+		fill := false
+		extremeIdx := 0
+		for x := 1; x <= buffer.Width; x++ {
+			if fill {
+				buffer.WritePixel(x, lineY, color)
+			}
+			for extremeIdx < len(extremas.values) &&
+				x == round(extremas.values[extremeIdx].attributes[0]) {
+				fill = !fill
+				extremeIdx++
+			}
+		}
+	}
+}
+
+func isEdgeValid(edge *Line, scanY int) bool {
+	// Is the edge horizontal?
+	if edge.a.attributes[1] == edge.b.attributes[1] {
+		return false
+	}
+
+	// Is the top vertex of the edge on the scan line?
+	if int(maxY(edge.a, edge.b).attributes[1]) == scanY {
+		return false
+	}
+
+	return true
+}
+
+/* XSortedVertex */
+
+// XSortedVertexSlice is a wrapper for when we want to sort Vertex
+// slices by their x values.  Implements golangs sorting interface
+type XSortedVertexSlice struct {
+	values []*Vertex
+}
+
+// Len returns the length of the slice.  For the sort interface
+func (slice *XSortedVertexSlice) Len() int {
+	return len(slice.values)
+}
+
+// Less returns whether Vertex at index i is less than that at index j.
+// For the sort interface
+func (slice *XSortedVertexSlice) Less(i, j int) bool {
+	return slice.values[i].attributes[0] < slice.values[j].attributes[0]
+}
+
+// Swap swaps the Vertex at index i with the one at index j.
+// For the sort interface
+func (slice *XSortedVertexSlice) Swap(i, j int) {
+	temp := slice.values[i]
+	slice.values[i] = slice.values[j]
+	slice.values[j] = temp
 }
 
 func parsePolygonObject(lines []string) ([]*Geometry, error) {
@@ -689,6 +820,17 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 
 	if !polygonFinished {
 		return nil, errors.New("Detected incomplete polygon specification\n")
+	}
+
+	// It is useful to store the edges, too
+	for _, geometry := range res {
+		for i := 0; i < len(geometry.vertices)-1; i++ {
+			var edge *Line
+			edge = CreateLine(geometry.vertices[i], geometry.vertices[i+1])
+			geometry.lines = append(geometry.lines, edge)
+
+			//TODO use these lines in polygon drawing and clipping
+		}
 	}
 
 	return res, nil
