@@ -757,7 +757,8 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 	polygonFinished := true
 	failed := false
 	for _, line := range lines {
-		tokens := strings.Split(line, " ")
+		line = strings.Trim(line, " ")
+		tokens := strings.Fields(line)
 		delim := tokens[len(tokens)-1]
 
 		// A new polygon must begin with a moveto command
@@ -906,12 +907,13 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		line = strings.Trim(line, " ")
 
 		if line == file.EndDelim {
 			break
 		}
 
-		tokens := strings.Split(line, " ")
+		tokens := strings.Fields(line)
 
 		// Skip blank lines
 		if line == "" {
