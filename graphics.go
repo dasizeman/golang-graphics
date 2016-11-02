@@ -497,12 +497,6 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 		line.Draw(buffer)
 	}
 
-	/*
-		for _, line := range geo.lines {
-			line.Draw(buffer)
-		}
-	*/
-
 	// TODO adapt for 3D
 	// Fill the geometry with black
 	geo.scanFill(buffer, RGBColor{0, 0, 0})
@@ -669,7 +663,8 @@ func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 		extremas.values = nil
 
 		// Go through each edge
-		for _, edge := range geo.lines {
+		for vertIdx := 0; vertIdx < len(geo.vertices)-1; vertIdx++ {
+			edge := CreateLine(geo.vertices[vertIdx], geo.vertices[vertIdx+1])
 			if !isEdgeValid(edge, lineY) {
 				continue
 			}
