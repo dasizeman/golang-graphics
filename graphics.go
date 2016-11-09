@@ -19,7 +19,7 @@ import (
 // Drawable is some kind of geometry that can be rasterized to a frame buffer
 type Drawable interface {
 	Draw(buffer *SoftFrameBuffer)
-	clip(buffer *SoftFrameBuffer) bool
+	Clip(buffer Port2D) bool
 }
 
 /* ----Structures---- */
@@ -83,16 +83,46 @@ func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 
 }
 
+/* Port */
+
+// Port2D is a rectangular geometry.  This can be used as, for example, a world
+// window or a viewport
+type Port2D struct {
+	xmin, ymin, xmax, ymax int
+}
+
 /* Scene */
 
 // Scene is a virtual space that can be rendered to a frame buffer
 type Scene struct {
+	// Objects in the scene
 	Objects []Drawable
+
+	// Global scene scale about world origin
+	Scale float64
+
+	// Global scene rotation, in degrees, counter-clockwise about origin
+	Rotation float64
+
+	// Global translation in the X direction
+	XTranslation float64
+
+	// Global translation in the Y direction
+	YTranslation float64
+
+	// World window
+	WorldWindow Port2D
+
+	// Viewport
+	Viewport Port2D
 }
 
 // Render renders the scene to the given buffer
 func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	for _, object := range scene.Objects {
+		if !object.Clip(scene.WorldWindow) {
+			continue
+		}
 		object.Draw(buffer)
 	}
 }
@@ -116,6 +146,11 @@ func Create2DVertex(a, b float64) *Vertex {
 // AddAttribute adds an attribute to vertex
 func (vertex *Vertex) AddAttribute(attr float64) {
 	vertex.attributes = append(vertex.attributes, attr)
+}
+
+// AddIntAttribute adds an integer attribute to the vertex
+func (vertex *Vertex) AddIntAttribute(attr int) {
+	vertex.AddAttribute(float64(attr))
 }
 
 func (vertex *Vertex) String() string {
@@ -218,7 +253,7 @@ func (vertex *Vertex) Print() {
 // Line is a line
 type Line struct {
 	a, b              *Vertex
-	clippingAlgorithm func(*Line, int, int) bool
+	clippingAlgorithm func(*Line, Port2D) bool
 }
 
 // CreateLine creates a line with the specified vertices and
@@ -232,8 +267,9 @@ func CreateLine(a, b *Vertex) *Line {
 	return result
 }
 
-func (line *Line) clip(buffer *SoftFrameBuffer) bool {
-	return line.clippingAlgorithm(line, buffer.Width, buffer.Height)
+// Clip clips the line to the given port
+func (line *Line) Clip(port Port2D) bool {
+	return line.clippingAlgorithm(line, port)
 }
 
 // Print prints the points in this line for debugging
@@ -244,11 +280,6 @@ func (line *Line) Print() {
 
 // Draw draws the line to the buffer
 func (line *Line) Draw(buffer *SoftFrameBuffer) {
-
-	// Our clipper has reported that the line is completely outside the buffer
-	if !line.clip(buffer) {
-		return
-	}
 
 	if line.handleEdgeCases(buffer) {
 		return
@@ -321,9 +352,9 @@ const (
 	csNorth int = 8
 )
 
-func (line *Line) cohenSutherlandClip(width, height int) bool {
-	aCode := line.a.getCSBitcode(width, height)
-	bCode := line.b.getCSBitcode(width, height)
+func (line *Line) cohenSutherlandClip(port Port2D) bool {
+	aCode := line.a.getCSBitcode(port)
+	bCode := line.b.getCSBitcode(port)
 	x0, y0, x1, y1 := line.UnpackFloat()
 
 	// Line completely out
@@ -344,22 +375,22 @@ func (line *Line) cohenSutherlandClip(width, height int) bool {
 		switch bitIdx {
 		case csWest:
 			xc = 0
-			yc = round(findYC(x0, x1, y0, y1, 0))
+			yc = round(findYC(x0, x1, y0, y1, float64(port.xmin)))
 			clippedVertex = minX(line.a, line.b)
 
 		case csEast:
-			xc = width
-			yc = round(findYC(x0, x1, y0, y1, float64(width)))
+			xc = port.xmax
+			yc = round(findYC(x0, x1, y0, y1, float64(port.xmax)))
 			clippedVertex = maxX(line.a, line.b)
 
 		case csSouth:
 			yc = 0
-			xc = round(findXC(x0, x1, y0, y1, 0))
+			xc = round(findXC(x0, x1, y0, y1, float64(port.ymin)))
 			clippedVertex = minY(line.a, line.b)
 
 		case csNorth:
-			yc = height
-			xc = round(findXC(x0, x1, y0, y1, float64(height)))
+			yc = port.ymax
+			xc = round(findXC(x0, x1, y0, y1, float64(port.ymax)))
 			clippedVertex = maxY(line.a, line.b)
 		}
 
@@ -367,8 +398,8 @@ func (line *Line) cohenSutherlandClip(width, height int) bool {
 		clippedVertex.attributes[1] = float64(yc)
 
 		// Recalculate bitcodes
-		aCode = line.a.getCSBitcode(width, height)
-		bCode = line.b.getCSBitcode(width, height)
+		aCode = line.a.getCSBitcode(port)
+		bCode = line.b.getCSBitcode(port)
 	}
 
 	return true
@@ -382,22 +413,22 @@ func findXC(x0, x1, y0, y1, clip float64) float64 {
 	return ((y1-clip)/(y1-y0))*(x0-x1) + x1
 }
 
-func (vertex *Vertex) getCSBitcode(width, height int) int {
+func (vertex *Vertex) getCSBitcode(port Port2D) int {
 
 	code := 0
 
 	x := vertex.attributes[0]
 	y := vertex.attributes[1]
 
-	if x < 0 {
+	if x < float64(port.xmin) {
 		code |= csWest
-	} else if x > float64(width) {
+	} else if x > float64(port.xmax) {
 		code |= csEast
 	}
 
-	if y < 0 {
+	if y < float64(port.ymin) {
 		code |= csSouth
-	} else if y > float64(height) {
+	} else if y > float64(port.ymax) {
 		code |= csNorth
 	}
 
@@ -478,13 +509,11 @@ func swap(a, b *int) {
 type Geometry struct {
 	vertices     []*Vertex
 	lines        []*Line
-	clippingFunc func(*Geometry, int, int)
+	clippingFunc func(*Geometry, Port2D)
 }
 
 // Draw draws this Geometry to the provided buffer
 func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
-	//TODO
-	geo.clip(buffer)
 
 	// Draw the lines formws by the points of the geometry
 
@@ -503,55 +532,54 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 
 }
 
-func (geo *Geometry) clip(buffer *SoftFrameBuffer) bool {
-	geo.clippingFunc(geo, buffer.Width, buffer.Height)
+// Clip clips the geometry to the given port
+func (geo *Geometry) Clip(port Port2D) bool {
+	geo.clippingFunc(geo, port)
 	return true
 }
 
-func (geo *Geometry) sutherlandHodgemanClip(width int, height int) {
+func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 	// Our input points for this clipping edge
 	v := geo.vertices
 	vprime := []*Vertex{}
-	fheight := float64(height)
-	fwidth := float64(width)
 
 	// TL
 	tl := &Vertex{}
-	tl.AddAttribute(0)
-	tl.AddAttribute(fheight)
+	tl.AddIntAttribute(port.xmin)
+	tl.AddIntAttribute(port.ymax)
 
 	// TR
 	tr := &Vertex{}
-	tr.AddAttribute(fwidth)
-	tr.AddAttribute(fheight)
+	tr.AddIntAttribute(port.xmax)
+	tr.AddIntAttribute(port.ymax)
 
 	// BL
 	bl := &Vertex{}
-	bl.AddAttribute(0)
-	bl.AddAttribute(0)
+	bl.AddIntAttribute(port.xmin)
+	bl.AddIntAttribute(port.ymin)
 
 	// BR
 	br := &Vertex{}
-	br.AddAttribute(fwidth)
-	br.AddAttribute(0)
+	br.AddIntAttribute(port.xmax)
+	br.AddIntAttribute(port.ymin)
 
 	corners := []*Vertex{tl, tr, br, bl}
 
 	northInside := func(vertex *Vertex) bool {
-		return vertex.attributes[1] <= fheight
+		return vertex.attributes[1] <= float64(port.ymax)
 	}
 
 	eastInside := func(vertex *Vertex) bool {
-		return vertex.attributes[0] <= fwidth
+		return vertex.attributes[0] <= float64(port.xmax)
 	}
 
 	southInside := func(vertex *Vertex) bool {
-		return vertex.attributes[1] >= 0
+		return vertex.attributes[1] >= float64(port.ymin)
 	}
 
 	westInside := func(vertex *Vertex) bool {
-		return vertex.attributes[0] >= 0
+		return vertex.attributes[0] >= float64(port.xmin)
 	}
 
 	insideCheckers := []func(*Vertex) bool{northInside, eastInside,
