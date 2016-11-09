@@ -88,7 +88,7 @@ func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 // Port2D is a rectangular geometry.  This can be used as, for example, a world
 // window or a viewport
 type Port2D struct {
-	xmin, ymin, xmax, ymax int
+	XMin, YMin, XMax, YMax int
 }
 
 /* Scene */
@@ -159,6 +159,9 @@ func (vertex *Vertex) String() string {
 
 // Equal checks if this Vertex is equal to another Vertex
 func (vertex *Vertex) Equal(other *Vertex) bool {
+	if other == nil {
+		return false
+	}
 	if len(vertex.attributes) != len(other.attributes) {
 		return false
 	}
@@ -375,22 +378,22 @@ func (line *Line) cohenSutherlandClip(port Port2D) bool {
 		switch bitIdx {
 		case csWest:
 			xc = 0
-			yc = round(findYC(x0, x1, y0, y1, float64(port.xmin)))
+			yc = round(findYC(x0, x1, y0, y1, float64(port.XMin)))
 			clippedVertex = minX(line.a, line.b)
 
 		case csEast:
-			xc = port.xmax
-			yc = round(findYC(x0, x1, y0, y1, float64(port.xmax)))
+			xc = port.XMax
+			yc = round(findYC(x0, x1, y0, y1, float64(port.XMax)))
 			clippedVertex = maxX(line.a, line.b)
 
 		case csSouth:
 			yc = 0
-			xc = round(findXC(x0, x1, y0, y1, float64(port.ymin)))
+			xc = round(findXC(x0, x1, y0, y1, float64(port.YMin)))
 			clippedVertex = minY(line.a, line.b)
 
 		case csNorth:
-			yc = port.ymax
-			xc = round(findXC(x0, x1, y0, y1, float64(port.ymax)))
+			yc = port.YMax
+			xc = round(findXC(x0, x1, y0, y1, float64(port.YMax)))
 			clippedVertex = maxY(line.a, line.b)
 		}
 
@@ -420,15 +423,15 @@ func (vertex *Vertex) getCSBitcode(port Port2D) int {
 	x := vertex.attributes[0]
 	y := vertex.attributes[1]
 
-	if x < float64(port.xmin) {
+	if x < float64(port.XMin) {
 		code |= csWest
-	} else if x > float64(port.xmax) {
+	} else if x > float64(port.XMax) {
 		code |= csEast
 	}
 
-	if y < float64(port.ymin) {
+	if y < float64(port.YMin) {
 		code |= csSouth
-	} else if y > float64(port.ymax) {
+	} else if y > float64(port.YMax) {
 		code |= csNorth
 	}
 
@@ -546,40 +549,40 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 	// TL
 	tl := &Vertex{}
-	tl.AddIntAttribute(port.xmin)
-	tl.AddIntAttribute(port.ymax)
+	tl.AddIntAttribute(port.XMin)
+	tl.AddIntAttribute(port.YMax)
 
 	// TR
 	tr := &Vertex{}
-	tr.AddIntAttribute(port.xmax)
-	tr.AddIntAttribute(port.ymax)
+	tr.AddIntAttribute(port.XMax)
+	tr.AddIntAttribute(port.YMax)
 
 	// BL
 	bl := &Vertex{}
-	bl.AddIntAttribute(port.xmin)
-	bl.AddIntAttribute(port.ymin)
+	bl.AddIntAttribute(port.XMin)
+	bl.AddIntAttribute(port.YMin)
 
 	// BR
 	br := &Vertex{}
-	br.AddIntAttribute(port.xmax)
-	br.AddIntAttribute(port.ymin)
+	br.AddIntAttribute(port.XMax)
+	br.AddIntAttribute(port.YMin)
 
 	corners := []*Vertex{tl, tr, br, bl}
 
 	northInside := func(vertex *Vertex) bool {
-		return vertex.attributes[1] <= float64(port.ymax)
+		return vertex.attributes[1] <= float64(port.YMax)
 	}
 
 	eastInside := func(vertex *Vertex) bool {
-		return vertex.attributes[0] <= float64(port.xmax)
+		return vertex.attributes[0] <= float64(port.XMax)
 	}
 
 	southInside := func(vertex *Vertex) bool {
-		return vertex.attributes[1] >= float64(port.ymin)
+		return vertex.attributes[1] >= float64(port.YMin)
 	}
 
 	westInside := func(vertex *Vertex) bool {
-		return vertex.attributes[0] >= float64(port.xmin)
+		return vertex.attributes[0] >= float64(port.XMin)
 	}
 
 	insideCheckers := []func(*Vertex) bool{northInside, eastInside,
@@ -598,21 +601,35 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 		// Check if each vertex is inside the edge and clip it to its side's
 		// intersection if not
+		var lastAppendedVertex *Vertex
 		for i := 0; i < len(v)-1; i++ {
 			side := &Line{a: v[i], b: v[i+1]}
 			intersection := findIntersection(side, clippingEdge)
 
 			if checker(side.a) && !checker(side.b) {
-				vprime = append(vprime, side.a)
+				if !side.a.Equal(lastAppendedVertex) {
+					vprime = append(vprime, side.a)
+				}
 				vprime = append(vprime, intersection)
+				lastAppendedVertex = intersection
 			} else if !checker(side.a) && checker(side.b) {
 				vprime = append(vprime, intersection)
 				vprime = append(vprime, side.b)
+				lastAppendedVertex = side.b
 			} else if checker(side.a) && checker(side.b) {
-				vprime = append(vprime, side.a)
+				if !side.a.Equal(lastAppendedVertex) {
+					vprime = append(vprime, side.a)
+				}
 				vprime = append(vprime, side.b)
+				lastAppendedVertex = side.b
 			}
 		}
+
+		// Make sure this clipped polygon is closed
+		if len(vprime) >= 1 {
+			vprime = append(vprime, vprime[0])
+		}
+
 		cornerIdx++
 		v = vprime
 		vprime = []*Vertex{}
