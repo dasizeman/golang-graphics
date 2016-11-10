@@ -59,14 +59,14 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 	newBuffer.colors[black] = "*"
 
 	// Allocate the pixel buffer
-	newBuffer.buffer = make([][]RGBColor, newBuffer.Height+1)
+	newBuffer.buffer = make([][]RGBColor, newBuffer.Height)
 	for y := range newBuffer.buffer {
-		newBuffer.buffer[y] = make([]RGBColor, newBuffer.Width+1)
+		newBuffer.buffer[y] = make([]RGBColor, newBuffer.Width)
 	}
 
 	// Set the buffer to white
-	for y := 0; y <= newBuffer.Height; y++ {
-		for x := 0; x <= newBuffer.Width; x++ {
+	for y := 0; y < newBuffer.Height; y++ {
+		for x := 0; x < newBuffer.Width; x++ {
 			newBuffer.WritePixel(x, y, white)
 		}
 	}
@@ -79,7 +79,7 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 
 	// We will reverse the y origin for compatibility with XPM output
-	frameBuffer.buffer[frameBuffer.Height-y][x] = color
+	frameBuffer.buffer[frameBuffer.Height-y-1][x] = color
 
 	// Add this to our set of colors
 	//frameBuffer.colors[color] = GenerateHexString(color)
@@ -142,7 +142,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	transformationMatrix.Mul(translationMatrix, transformationMatrix)
 
 
-	fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
+	//fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
 	for _, object := range scene.Objects {
 
 		// Apply transformation
@@ -154,6 +154,8 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		}
 
 		// TODO apply world-to-viewport transformation
+
+		object.Discretize()
 		object.Draw(buffer)
 	}
 }
@@ -414,6 +416,11 @@ func (line *Line) Transform(matrix mat64.Matrix) {
 	// TODO can't transform lines right now
 }
 
+// Discretize rounds all of the points in the line to integers
+func (line *Line) Discretize() {
+	// TODO lines can't be discretized right now
+}
+
 
 // Print prints the points in this line for debugging
 func (line *Line) Print() {
@@ -641,6 +648,16 @@ func (geo *Geometry) Transform(matrix mat64.Matrix) {
 	}
 }
 
+// Discretize rounds all vertices of the geometry to integers
+func (geo *Geometry) Discretize() {
+	for i, vertex := range geo.vertices {
+		for j, attr := range vertex.attributes {
+			rounded := round(attr)
+			geo.vertices[i].attributes[j] = float64(rounded)
+		}
+	}
+}
+
 func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 	// Our input points for this clipping edge
@@ -813,7 +830,7 @@ func (geo *Geometry) Print() {
 func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 	extremas := &XSortedVertexSlice{}
 	// Scan every row in the buffer
-	for lineY := 1; lineY <= buffer.Height; lineY++ {
+	for lineY := 0; lineY <= buffer.Height; lineY++ {
 		scanLine := CreateLine(Create2DVertex(0, float64(lineY)),
 			Create2DVertex(float64(buffer.Width), float64(lineY)))
 
@@ -849,7 +866,7 @@ func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 		// Scan over the line
 		fill := false
 		extremeIdx := 0
-		for x := 1; x <= buffer.Width; x++ {
+		for x := 0; x <= buffer.Width; x++ {
 			if fill {
 				buffer.WritePixel(x, lineY, color)
 			}
