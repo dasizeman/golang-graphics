@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/gonum/matrix/mat64"
 	"log"
 	"math"
 	"os"
@@ -20,6 +21,8 @@ import (
 type Drawable interface {
 	Draw(buffer *SoftFrameBuffer)
 	Clip(buffer Port2D) bool
+	Transform(matrix mat64.Matrix)
+	Discretize()
 }
 
 /* ----Structures---- */
@@ -102,10 +105,10 @@ type Scene struct {
 	Scale float64
 
 	// Global scene rotation, in degrees, counter-clockwise about origin
-	Rotation float64
+	Rotation int
 
 	// Global translation in the X direction
-	XTranslation float64
+		XTranslation float64
 
 	// Global translation in the Y direction
 	YTranslation float64
@@ -119,10 +122,38 @@ type Scene struct {
 
 // Render renders the scene to the given buffer
 func (scene *Scene) Render(buffer *SoftFrameBuffer) {
+	// Get the translation matrix
+	translationMatrix :=
+		GetTranslationTransformMatrix(float64(scene.XTranslation),
+			float64(scene.YTranslation))
+
+	// Get the rotation matrix
+	rotationMatrix :=
+		GetRotationTransformMatrix(scene.Rotation)
+
+	// Get the scale matrix
+	scaleMatrix := GetScaleTransformMatrix(float64(scene.Scale),
+		float64(scene.Scale))
+
+	// Compose the transformation matrix
+	transformationMatrix := mat64.NewDense(3,3,nil)
+	transformationMatrix.Mul(rotationMatrix, scaleMatrix)
+
+	transformationMatrix.Mul(translationMatrix, transformationMatrix)
+
+
+	fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
 	for _, object := range scene.Objects {
+
+		// Apply transformation
+		object.Transform(transformationMatrix)
+
+		// Clip to the world window
 		if !object.Clip(scene.WorldWindow) {
 			continue
 		}
+
+		// TODO apply world-to-viewport transformation
 		object.Draw(buffer)
 	}
 }
@@ -140,7 +171,16 @@ func Create2DVertex(a, b float64) *Vertex {
 	result := &Vertex{}
 	result.AddAttribute(a)
 	result.AddAttribute(b)
+
+	// Homogenous
+	result.AddAttribute(1)
 	return result
+}
+
+// Create2DVertexInt is a wrapper for Create2DVertex
+// that accepts integer arguments
+func Create2DVertexInt(a,b int) *Vertex {
+	return Create2DVertex(float64(a),float64(b))
 }
 
 // AddAttribute adds an attribute to vertex
@@ -251,6 +291,40 @@ func (vertex *Vertex) Print() {
 	fmt.Printf(")\n")
 }
 
+/* Tranformations */
+
+// GetScaleTransformMatrix returns a transformation matrix for a scale
+// transform with the given parameters
+func GetScaleTransformMatrix(xscale, yscale float64) mat64.Matrix {
+	return mat64.NewDense(3, 3,
+		[]float64{
+			xscale, 0, 0,
+			0, yscale, 0,
+			0, 0, 1})
+}
+
+// GetTranslationTransformMatrix returns a transformation matrix for a
+// translation transform with the given parameters
+func GetTranslationTransformMatrix(dx, dy float64) mat64.Matrix {
+	return mat64.NewDense(3, 3,
+		[]float64{
+			1, 0, dx,
+			0, 1, dy,
+			0, 0, 1})
+}
+
+// GetRotationTransformMatrix returns a transformation matrix for a
+// rotation transform with the given parameters
+func GetRotationTransformMatrix(deg int) mat64.Matrix {
+	fdeg := float64(deg)
+	frad := fdeg * (math.Pi/180)
+	return mat64.NewDense(3, 3,
+		[]float64{
+			math.Cos(frad), -math.Sin(frad), 0,
+			math.Sin(frad), math.Cos(frad), 0,
+			0, 0, 1})
+}
+
 /* Line */
 
 // Line is a line
@@ -275,11 +349,6 @@ func (line *Line) Clip(port Port2D) bool {
 	return line.clippingAlgorithm(line, port)
 }
 
-// Print prints the points in this line for debugging
-func (line *Line) Print() {
-	x0, y0, x1, y1 := line.UnpackFloat()
-	fmt.Printf("[%f,%f]\n[%f,%f]\n", x0, y0, x1, y1)
-}
 
 // Draw draws the line to the buffer
 func (line *Line) Draw(buffer *SoftFrameBuffer) {
@@ -338,6 +407,18 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 		fy = fy + dy
 	}
 
+}
+
+// Transform applies the transformation matrix to the line
+func (line *Line) Transform(matrix mat64.Matrix) {
+	// TODO can't transform lines right now
+}
+
+
+// Print prints the points in this line for debugging
+func (line *Line) Print() {
+	x0, y0, x1, y1 := line.UnpackFloat()
+	fmt.Printf("[%f,%f]\n[%f,%f]\n", x0, y0, x1, y1)
 }
 
 func round(f float64) int {
@@ -440,10 +521,10 @@ func (vertex *Vertex) getCSBitcode(port Port2D) int {
 
 // UnpackInt returns this line's vertex coordinates as a sequence of integers
 func (line *Line) UnpackInt() (qx, qy, rx, ry int) {
-	qx = int(line.a.attributes[0])
-	qy = int(line.a.attributes[1])
-	rx = int(line.b.attributes[0])
-	ry = int(line.b.attributes[1])
+	qx = round(line.a.attributes[0])
+	qy = round(line.a.attributes[1])
+	rx = round(line.b.attributes[0])
+	ry = round(line.b.attributes[1])
 
 	return
 }
@@ -541,31 +622,55 @@ func (geo *Geometry) Clip(port Port2D) bool {
 	return true
 }
 
+// Transform applies the given transformation matrix to the
+// geometry
+func (geo *Geometry) Transform(matrix mat64.Matrix) {
+	for _, vertex := range(geo.vertices) {
+		// Create a column vector from the vertex
+		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
+
+		// Apply the transformation
+		vector.MulVec(matrix, vector)
+
+		// Divide out homogenous coord
+		homogScale := 1 / vector.At(vector.Len()-1,0)
+		vector.ScaleVec(homogScale, vector)
+
+		// Put the new vertex data back
+		vertex.attributes = vector.RawVector().Data
+	}
+}
+
 func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 	// Our input points for this clipping edge
 	v := geo.vertices
 	vprime := []*Vertex{}
 
+	// TODO cleanup
 	// TL
-	tl := &Vertex{}
-	tl.AddIntAttribute(port.XMin)
-	tl.AddIntAttribute(port.YMax)
+	//tl := &Vertex{}
+	//tl.AddIntAttribute(port.XMin)
+	//tl.AddIntAttribute(port.YMax)
+	tl := Create2DVertexInt(port.XMin, port.YMax)
 
 	// TR
-	tr := &Vertex{}
-	tr.AddIntAttribute(port.XMax)
-	tr.AddIntAttribute(port.YMax)
+	//tr := &Vertex{}
+	//tr.AddIntAttribute(port.XMax)
+	//tr.AddIntAttribute(port.YMax)
+	tr := Create2DVertexInt(port.XMax, port.YMax)
 
 	// BL
-	bl := &Vertex{}
-	bl.AddIntAttribute(port.XMin)
-	bl.AddIntAttribute(port.YMin)
+	//bl := &Vertex{}
+	//bl.AddIntAttribute(port.XMin)
+	//bl.AddIntAttribute(port.YMin)
+	bl := Create2DVertexInt(port.XMin, port.YMin)
 
 	// BR
-	br := &Vertex{}
-	br.AddIntAttribute(port.XMax)
-	br.AddIntAttribute(port.YMin)
+	//br := &Vertex{}
+	//br.AddIntAttribute(port.XMax)
+	//br.AddIntAttribute(port.YMin)
+	br := Create2DVertexInt(port.XMax, port.YMin)
 
 	corners := []*Vertex{tl, tr, br, bl}
 
@@ -601,6 +706,7 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 
 		// Check if each vertex is inside the edge and clip it to its side's
 		// intersection if not
+		//fmt.Printf("%v\n", v)
 		var lastAppendedVertex *Vertex
 		for i := 0; i < len(v)-1; i++ {
 			side := &Line{a: v[i], b: v[i+1]}
@@ -625,14 +731,21 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 			}
 		}
 
+		// Remove duplicate vertices
+		removeDuplicateVertexPtrs(vprime)
+
 		// Make sure this clipped polygon is closed
-		if len(vprime) >= 1 {
-			vprime = append(vprime, vprime[0])
+		if len(vprime) >= 1 && !vprime[0].Equal(vprime[len(vprime)-1]){
+			vprime = append(vprime, 
+				Create2DVertex(vprime[0].attributes[0],
+					vprime[0].attributes[1]))
+
 		}
 
 		cornerIdx++
-		v = vprime
-		vprime = []*Vertex{}
+		v = make([]*Vertex, len(vprime))
+		copy(v, vprime)
+		vprime = make([]*Vertex,0)
 	}
 
 	// Update the polygon
@@ -847,9 +960,7 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 			failed = true
 		}
 
-		point := &Vertex{}
-		point.AddAttribute(float64(xCoord))
-		point.AddAttribute(float64(yCoord))
+		point := Create2DVertex(float64(xCoord), float64(yCoord))
 
 		toAdd.AddVertex(point)
 
@@ -1167,4 +1278,41 @@ func maxY(a, b *Vertex) *Vertex {
 	}
 
 	return b
+}
+
+/*
+func removeDuplicateVertexPtrs(slice []*Vertex) []*Vertex {
+	found := make(map[*Vertex]bool)
+	res := make([]*Vertex, len(slice))
+	originalLength := len(slice)
+	newLength := 0
+
+	for i := 0; i < originalLength; i++ {
+		vertex := slice[i]
+		_,included := found[vertex]
+		if !included {
+			res[newLength] = vertex
+			newLength++
+		}
+		found[vertex] = true
+	}
+
+	return res[:newLength]
+}
+*/
+
+func removeDuplicateVertexPtrs(slice []*Vertex) {
+	found := make(map[*Vertex]bool)
+	length := len(slice)
+
+	for i := 0; i < length; i++ {
+		vertex := slice[i]
+		_,included := found[vertex]
+		if included {
+			slice = append(slice[:i], slice[i+1:]...)
+			length--
+			i--
+		}
+		found[vertex] = true
+	}
 }
