@@ -153,11 +153,44 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 			continue
 		}
 
-		// TODO apply world-to-viewport transformation
+		// Apply world-to-viewport transformation
+		scene.transformToViewport(object)
 
 		object.Discretize()
 		object.Draw(buffer)
 	}
+}
+
+func (scene *Scene) transformToViewport(object Drawable) {
+
+	// Get the matrix to translate the world window to the origin
+	originTranslationMatrix :=
+		GetTranslationTransformMatrix(-float64(scene.WorldWindow.XMin), 
+			-float64(scene.WorldWindow.YMin))
+
+	// Get the scale matrix
+	xScale := float64(scene.Viewport.XMax - scene.Viewport.XMin) /
+		float64(scene.WorldWindow.XMax - scene.WorldWindow.XMin)
+	
+	yScale := float64(scene.Viewport.YMax - scene.Viewport.YMin) /
+		float64(scene.WorldWindow.YMax - scene.WorldWindow.YMin)
+
+	viewportScaleMatrix :=
+		GetScaleTransformMatrix(xScale, yScale)
+
+	// Get the matrix to translate the viewport to the desired location
+	viewportTranslationMatrix :=
+		GetTranslationTransformMatrix(float64(scene.Viewport.XMin),
+			float64(scene.Viewport.YMin))
+
+	// Compose the final transformation matrix
+	transformationMatrix := mat64.NewDense(3,3, nil)
+	transformationMatrix.Mul(viewportScaleMatrix, originTranslationMatrix)
+	transformationMatrix.Mul(viewportTranslationMatrix, transformationMatrix)
+
+	// Apply the transformation
+	object.Transform(transformationMatrix)
+
 }
 
 /* Vertex */
