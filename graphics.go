@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/gonum/matrix/mat64"
 	"log"
 	"math"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/gonum/matrix/mat64"
 )
 
 /* ----Interfaces---- */
@@ -108,7 +109,7 @@ type Scene struct {
 	Rotation int
 
 	// Global translation in the X direction
-		XTranslation float64
+	XTranslation float64
 
 	// Global translation in the Y direction
 	YTranslation float64
@@ -136,11 +137,10 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		float64(scene.Scale))
 
 	// Compose the transformation matrix
-	transformationMatrix := mat64.NewDense(3,3,nil)
+	transformationMatrix := mat64.NewDense(3, 3, nil)
 	transformationMatrix.Mul(rotationMatrix, scaleMatrix)
 
 	transformationMatrix.Mul(translationMatrix, transformationMatrix)
-
 
 	//fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
 	for _, object := range scene.Objects {
@@ -165,15 +165,15 @@ func (scene *Scene) transformToViewport(object Drawable) {
 
 	// Get the matrix to translate the world window to the origin
 	originTranslationMatrix :=
-		GetTranslationTransformMatrix(-float64(scene.WorldWindow.XMin), 
+		GetTranslationTransformMatrix(-float64(scene.WorldWindow.XMin),
 			-float64(scene.WorldWindow.YMin))
 
 	// Get the scale matrix
-	xScale := float64(scene.Viewport.XMax - scene.Viewport.XMin) /
-		float64(scene.WorldWindow.XMax - scene.WorldWindow.XMin)
-	
-	yScale := float64(scene.Viewport.YMax - scene.Viewport.YMin) /
-		float64(scene.WorldWindow.YMax - scene.WorldWindow.YMin)
+	xScale := float64(scene.Viewport.XMax-scene.Viewport.XMin) /
+		float64(scene.WorldWindow.XMax-scene.WorldWindow.XMin)
+
+	yScale := float64(scene.Viewport.YMax-scene.Viewport.YMin) /
+		float64(scene.WorldWindow.YMax-scene.WorldWindow.YMin)
 
 	viewportScaleMatrix :=
 		GetScaleTransformMatrix(xScale, yScale)
@@ -184,7 +184,7 @@ func (scene *Scene) transformToViewport(object Drawable) {
 			float64(scene.Viewport.YMin))
 
 	// Compose the final transformation matrix
-	transformationMatrix := mat64.NewDense(3,3, nil)
+	transformationMatrix := mat64.NewDense(3, 3, nil)
 	transformationMatrix.Mul(viewportScaleMatrix, originTranslationMatrix)
 	transformationMatrix.Mul(viewportTranslationMatrix, transformationMatrix)
 
@@ -214,8 +214,8 @@ func Create2DVertex(a, b float64) *Vertex {
 
 // Create2DVertexInt is a wrapper for Create2DVertex
 // that accepts integer arguments
-func Create2DVertexInt(a,b int) *Vertex {
-	return Create2DVertex(float64(a),float64(b))
+func Create2DVertexInt(a, b int) *Vertex {
+	return Create2DVertex(float64(a), float64(b))
 }
 
 // AddAttribute adds an attribute to vertex
@@ -352,7 +352,7 @@ func GetTranslationTransformMatrix(dx, dy float64) mat64.Matrix {
 // rotation transform with the given parameters
 func GetRotationTransformMatrix(deg int) mat64.Matrix {
 	fdeg := float64(deg)
-	frad := fdeg * (math.Pi/180)
+	frad := fdeg * (math.Pi / 180)
 	return mat64.NewDense(3, 3,
 		[]float64{
 			math.Cos(frad), -math.Sin(frad), 0,
@@ -383,7 +383,6 @@ func CreateLine(a, b *Vertex) *Line {
 func (line *Line) Clip(port Port2D) bool {
 	return line.clippingAlgorithm(line, port)
 }
-
 
 // Draw draws the line to the buffer
 func (line *Line) Draw(buffer *SoftFrameBuffer) {
@@ -453,7 +452,6 @@ func (line *Line) Transform(matrix mat64.Matrix) {
 func (line *Line) Discretize() {
 	// TODO lines can't be discretized right now
 }
-
 
 // Print prints the points in this line for debugging
 func (line *Line) Print() {
@@ -665,7 +663,7 @@ func (geo *Geometry) Clip(port Port2D) bool {
 // Transform applies the given transformation matrix to the
 // geometry
 func (geo *Geometry) Transform(matrix mat64.Matrix) {
-	for _, vertex := range(geo.vertices) {
+	for _, vertex := range geo.vertices {
 		// Create a column vector from the vertex
 		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
@@ -673,7 +671,7 @@ func (geo *Geometry) Transform(matrix mat64.Matrix) {
 		vector.MulVec(matrix, vector)
 
 		// Divide out homogenous coord
-		homogScale := 1 / vector.At(vector.Len()-1,0)
+		homogScale := 1 / vector.At(vector.Len()-1, 0)
 		vector.ScaleVec(homogScale, vector)
 
 		// Put the new vertex data back
@@ -785,8 +783,8 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 		removeDuplicateVertexPtrs(vprime)
 
 		// Make sure this clipped polygon is closed
-		if len(vprime) >= 1 && !vprime[0].Equal(vprime[len(vprime)-1]){
-			vprime = append(vprime, 
+		if len(vprime) >= 1 && !vprime[0].Equal(vprime[len(vprime)-1]) {
+			vprime = append(vprime,
 				Create2DVertex(vprime[0].attributes[0],
 					vprime[0].attributes[1]))
 
@@ -795,7 +793,7 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 		cornerIdx++
 		v = make([]*Vertex, len(vprime))
 		copy(v, vprime)
-		vprime = make([]*Vertex,0)
+		vprime = make([]*Vertex, 0)
 	}
 
 	// Update the polygon
@@ -1036,6 +1034,10 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 	}
 
 	return res, nil
+}
+
+// SMFFile represents an input file in the SMF format
+type SMFFile struct {
 }
 
 /* PostScriptFile */
@@ -1357,7 +1359,7 @@ func removeDuplicateVertexPtrs(slice []*Vertex) {
 
 	for i := 0; i < length; i++ {
 		vertex := slice[i]
-		_,included := found[vertex]
+		_, included := found[vertex]
 		if included {
 			slice = append(slice[:i], slice[i+1:]...)
 			length--
