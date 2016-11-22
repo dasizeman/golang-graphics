@@ -695,29 +695,12 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 	v := geo.vertices
 	vprime := []*Vertex{}
 
-	// TODO cleanup
-	// TL
-	//tl := &Vertex{}
-	//tl.AddIntAttribute(port.XMin)
-	//tl.AddIntAttribute(port.YMax)
 	tl := Create2DVertexInt(port.XMin, port.YMax)
 
-	// TR
-	//tr := &Vertex{}
-	//tr.AddIntAttribute(port.XMax)
-	//tr.AddIntAttribute(port.YMax)
 	tr := Create2DVertexInt(port.XMax, port.YMax)
 
-	// BL
-	//bl := &Vertex{}
-	//bl.AddIntAttribute(port.XMin)
-	//bl.AddIntAttribute(port.YMin)
 	bl := Create2DVertexInt(port.XMin, port.YMin)
 
-	// BR
-	//br := &Vertex{}
-	//br.AddIntAttribute(port.XMax)
-	//br.AddIntAttribute(port.YMin)
 	br := Create2DVertexInt(port.XMax, port.YMin)
 
 	corners := []*Vertex{tl, tr, br, bl}
@@ -1036,26 +1019,21 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 	return res, nil
 }
 
-// SMFFile represents an input file in the SMF format
-type SMFFile struct {
+// TODO this can definitely be refactored, this file logic is almost exactly
+// the same
+/* SMFFile */
+
+// File represents an input file that can be parsed for different input objects
+type File struct {
+	vertexDelim, faceDelim string
+	filePath               string
+	handle                 *os.File
+	scanner                *bufio.Scanner
+	lineIdx                int
 }
 
-/* PostScriptFile */
-
-// PostScriptFile is a wrapper for a PostScript format specification of a scene
-type PostScriptFile struct {
-	// String "constants"
-	BeginDelim, EndDelim, LineDelim string
-	PolygonDelims                   map[string]bool
-
-	filePath string
-	handle   *os.File
-	scanner  *bufio.Scanner
-	lineIdx  int
-}
-
-// OpenPostScriptFile opens the PostScript file at the given path
-func OpenPostScriptFile(path string) (*PostScriptFile, error) {
+// OpenSMFFile opens the SMF file at the given path
+func OpenSMFFile(path string) (*File, error) {
 
 	fp, err := os.Open(path)
 	if err != nil {
@@ -1064,27 +1042,59 @@ func OpenPostScriptFile(path string) (*PostScriptFile, error) {
 
 	scanner := bufio.NewScanner(fp)
 
-	file := &PostScriptFile{
+	file := &File{
 		filePath: path,
 		handle:   fp,
 		scanner:  scanner,
 		lineIdx:  0}
 
 	// Supported line tokens
-	file.BeginDelim = "%%%BEGIN"
-	file.EndDelim = "%%%END"
-	file.LineDelim = "Line"
-	file.PolygonDelims = make(map[string]bool)
-	file.PolygonDelims["moveto"] = true
-	file.PolygonDelims["lineto"] = true
-	file.PolygonDelims["stroke"] = true
-	file.lineIdx = 1
+	file.vertexDelim = "v"
+	file.faceDelim = "f"
 
 	return file, err
 }
 
-// ParseObjects parses all Drawable geometry objects out of a PostScriptFile
-func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
+// Close closes this SMFFile
+func (file *File) Close() {
+	file.handle.Close()
+}
+
+// ParseSMFObjects parses objects from an SMF file
+func (file *File) ParseSMFObjects() ([]Drawable, error) {
+	return nil, nil
+}
+
+// OpenPostScriptFile opens the PostScript file at the given path
+func OpenPostScriptFile(path string) (*File, error) {
+
+	fp, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	scanner := bufio.NewScanner(fp)
+
+	file := &File{
+		filePath: path,
+		handle:   fp,
+		scanner:  scanner,
+		lineIdx:  0}
+
+	return file, err
+}
+
+// ParsePSObjects parses all Drawable geometry objects out of a PostScriptFile
+func (file *File) ParsePSObjects() ([]Drawable, error) {
+
+	// Supported line tokens
+	BeginDelim := "%%%BEGIN"
+	EndDelim := "%%%END"
+	LineDelim := "Line"
+	PolygonDelims := make(map[string]bool)
+	PolygonDelims["moveto"] = true
+	PolygonDelims["lineto"] = true
+	PolygonDelims["stroke"] = true
 
 	var objects []Drawable
 	foundBegin := false
@@ -1093,7 +1103,7 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 	for !foundBegin && scanner.Scan() {
 		line := scanner.Text()
 		file.lineIdx++
-		if line == file.BeginDelim {
+		if line == BeginDelim {
 			foundBegin = true
 		}
 	}
@@ -1112,7 +1122,7 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 		line := scanner.Text()
 		line = strings.Trim(line, " ")
 
-		if line == file.EndDelim {
+		if line == EndDelim {
 			break
 		}
 
@@ -1127,7 +1137,7 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 		delim := tokens[len(tokens)-1]
 
 		// Polygons
-		_, polygonDelimFound := file.PolygonDelims[delim]
+		_, polygonDelimFound := PolygonDelims[delim]
 		if polygonDelimFound {
 			polygonLines = append(polygonLines, line)
 			file.lineIdx++
@@ -1136,12 +1146,12 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 		// Single line objects
 		switch delim {
-		case file.LineDelim:
+		case LineDelim:
 			object := parseLineObject(tokens[:len(tokens)-1])
 			if object == nil {
 				errStr :=
 					fmt.Sprintf("Failed to parse %s object on line %d\n",
-						file.LineDelim, file.lineIdx)
+						LineDelim, file.lineIdx)
 				return objects, errors.New(errStr)
 			}
 
@@ -1178,11 +1188,6 @@ func (file *PostScriptFile) ParseObjects() ([]Drawable, error) {
 
 	return objects, nil
 
-}
-
-// Close closes this PostScriptFile
-func (file *PostScriptFile) Close() {
-	file.handle.Close()
 }
 
 /* XPMFile */
