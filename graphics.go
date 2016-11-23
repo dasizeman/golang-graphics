@@ -92,7 +92,7 @@ func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 // Port2D is a rectangular geometry.  This can be used as, for example, a world
 // window or a viewport
 type Port2D struct {
-	XMin, YMin, XMax, YMax int
+	XMin, YMin, XMax, YMax float64
 }
 
 /* Scene */
@@ -102,20 +102,37 @@ type Scene struct {
 	// Objects in the scene
 	Objects []Drawable
 
-	// Global scene scale about world origin
-	Scale float64
+	/*
+		// Global scene scale about world origin
+		Scale float64
 
-	// Global scene rotation, in degrees, counter-clockwise about origin
-	Rotation int
+		// Global scene rotation, in degrees, counter-clockwise about origin
+		Rotation int
 
-	// Global translation in the X direction
-	XTranslation float64
+		// Global translation in the X direction
+		XTranslation float64
 
-	// Global translation in the Y direction
-	YTranslation float64
+		// Global translation in the Y direction
+		YTranslation float64
+	*/
 
-	// World window
-	WorldWindow Port2D
+	// Projection Reference Point
+	PRP *mat64.Vector
+
+	// View Reference Point
+	VRP *mat64.Vector
+
+	// View Plane Normal
+	VPN *mat64.Vector
+
+	// View Up Vector
+	VUP *mat64.Vector
+
+	// View Reference Coordinate window
+	ViewPlane Port2D
+
+	// Clipping Planes
+	FrontClippingPlane, BackClippingPlane float64
 
 	// Viewport
 	Viewport Port2D
@@ -123,35 +140,40 @@ type Scene struct {
 
 // Render renders the scene to the given buffer
 func (scene *Scene) Render(buffer *SoftFrameBuffer) {
-	// Get the translation matrix
-	translationMatrix :=
-		GetTranslationTransformMatrix(float64(scene.XTranslation),
-			float64(scene.YTranslation))
+	// TODO have some way of toggling transformations
+	/*
+		    // Get the translation matrix
+		    translationMatrix :=
+			    GetTranslationTransformMatrix(float64(scene.XTranslation),
+				    float64(scene.YTranslation))
 
-	// Get the rotation matrix
-	rotationMatrix :=
-		GetRotationTransformMatrix(scene.Rotation)
+		    // Get the rotation matrix
+		    rotationMatrix :=
+			    GetRotationTransformMatrix(scene.Rotation)
 
-	// Get the scale matrix
-	scaleMatrix := GetScaleTransformMatrix(float64(scene.Scale),
-		float64(scene.Scale))
+		    // Get the scale matrix
+		    scaleMatrix := GetScaleTransformMatrix(float64(scene.Scale),
+			    float64(scene.Scale))
 
-	// Compose the transformation matrix
-	transformationMatrix := mat64.NewDense(3, 3, nil)
-	transformationMatrix.Mul(rotationMatrix, scaleMatrix)
+		    // Compose the transformation matrix
+		    transformationMatrix := mat64.NewDense(3, 3, nil)
+		    transformationMatrix.Mul(rotationMatrix, scaleMatrix)
 
-	transformationMatrix.Mul(translationMatrix, transformationMatrix)
+		    transformationMatrix.Mul(translationMatrix, transformationMatrix)
 
-	//fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
+		    //fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
+	*/
 	for _, object := range scene.Objects {
 
-		// Apply transformation
-		object.Transform(transformationMatrix)
+		/*
+			    // Apply transformation
+			    object.Transform(transformationMatrix)
 
-		// Clip to the world window
-		if !object.Clip(scene.WorldWindow) {
-			continue
-		}
+			    // Clip to the world window
+			    if !object.Clip(scene.WorldWindow) {
+				    continue
+			    }
+		*/
 
 		// Apply world-to-viewport transformation
 		scene.transformToViewport(object)
@@ -165,15 +187,15 @@ func (scene *Scene) transformToViewport(object Drawable) {
 
 	// Get the matrix to translate the world window to the origin
 	originTranslationMatrix :=
-		GetTranslationTransformMatrix(-float64(scene.WorldWindow.XMin),
-			-float64(scene.WorldWindow.YMin))
+		GetTranslationTransformMatrix(-float64(scene.ViewPlane.XMin),
+			-float64(scene.ViewPlane.YMin))
 
 	// Get the scale matrix
 	xScale := float64(scene.Viewport.XMax-scene.Viewport.XMin) /
-		float64(scene.WorldWindow.XMax-scene.WorldWindow.XMin)
+		float64(scene.ViewPlane.XMax-scene.ViewPlane.XMin)
 
 	yScale := float64(scene.Viewport.YMax-scene.Viewport.YMin) /
-		float64(scene.WorldWindow.YMax-scene.WorldWindow.YMin)
+		float64(scene.ViewPlane.YMax-scene.ViewPlane.YMin)
 
 	viewportScaleMatrix :=
 		GetScaleTransformMatrix(xScale, yScale)
@@ -501,7 +523,7 @@ func (line *Line) cohenSutherlandClip(port Port2D) bool {
 			clippedVertex = minX(line.a, line.b)
 
 		case csEast:
-			xc = port.XMax
+			xc = int(port.XMax)
 			yc = round(findYC(x0, x1, y0, y1, float64(port.XMax)))
 			clippedVertex = maxX(line.a, line.b)
 
@@ -511,7 +533,7 @@ func (line *Line) cohenSutherlandClip(port Port2D) bool {
 			clippedVertex = minY(line.a, line.b)
 
 		case csNorth:
-			yc = port.YMax
+			yc = int(port.YMax)
 			xc = round(findXC(x0, x1, y0, y1, float64(port.YMax)))
 			clippedVertex = maxY(line.a, line.b)
 		}
@@ -695,13 +717,13 @@ func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
 	v := geo.vertices
 	vprime := []*Vertex{}
 
-	tl := Create2DVertexInt(port.XMin, port.YMax)
+	tl := Create2DVertex(port.XMin, port.YMax)
 
-	tr := Create2DVertexInt(port.XMax, port.YMax)
+	tr := Create2DVertex(port.XMax, port.YMax)
 
-	bl := Create2DVertexInt(port.XMin, port.YMin)
+	bl := Create2DVertex(port.XMin, port.YMin)
 
-	br := Create2DVertexInt(port.XMax, port.YMin)
+	br := Create2DVertex(port.XMax, port.YMin)
 
 	corners := []*Vertex{tl, tr, br, bl}
 
