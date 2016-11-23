@@ -240,6 +240,16 @@ func Create2DVertexInt(a, b int) *Vertex {
 	return Create2DVertex(float64(a), float64(b))
 }
 
+// Create3DVertex creates a vertex with the specified x,y, and z coordinates
+func Create3DVertex(a, b, c float64) *Vertex {
+	result := &Vertex{}
+	result.AddAttribute(a)
+	result.AddAttribute(b)
+	result.AddAttribute(c)
+
+	return result
+}
+
 // AddAttribute adds an attribute to vertex
 func (vertex *Vertex) AddAttribute(attr float64) {
 	vertex.attributes = append(vertex.attributes, attr)
@@ -339,25 +349,28 @@ func VDot(a, b *Vertex) float64 {
 	return sum
 }
 
-// Print prints this vertex
-func (vertex *Vertex) Print() {
-	fmt.Printf("(")
-	for _, attr := range vertex.attributes {
-		fmt.Printf("%f,", attr)
-	}
-	fmt.Printf(")\n")
-}
-
 /* Tranformations */
 
 // GetScaleTransformMatrix returns a transformation matrix for a scale
 // transform with the given parameters
 func GetScaleTransformMatrix(xscale, yscale float64) mat64.Matrix {
+	// TODO update to 3D
 	return mat64.NewDense(3, 3,
 		[]float64{
 			xscale, 0, 0,
 			0, yscale, 0,
 			0, 0, 1})
+}
+
+// GetTranslationTransformMatrix3D returns a transformation matrix for a
+// translation transform with the given parameters
+func GetTranslationTransformMatrix3D(dx, dy, dz float64) mat64.Matrix {
+	return mat64.NewDense(4, 4,
+		[]float64{
+			1, 0, 0, dx,
+			0, 1, 0, dy,
+			0, 0, 1, dz,
+			0, 0, 0, 1})
 }
 
 // GetTranslationTransformMatrix returns a transformation matrix for a
@@ -373,6 +386,7 @@ func GetTranslationTransformMatrix(dx, dy float64) mat64.Matrix {
 // GetRotationTransformMatrix returns a transformation matrix for a
 // rotation transform with the given parameters
 func GetRotationTransformMatrix(deg int) mat64.Matrix {
+	// TODO update to 3D
 	fdeg := float64(deg)
 	frad := fdeg * (math.Pi / 180)
 	return mat64.NewDense(3, 3,
@@ -380,6 +394,121 @@ func GetRotationTransformMatrix(deg int) mat64.Matrix {
 			math.Cos(frad), -math.Sin(frad), 0,
 			math.Sin(frad), math.Cos(frad), 0,
 			0, 0, 1})
+}
+
+// GetPerspectiveProjectionMatrix returns the matrix used to transform 3D
+// vertices to the canonical view volume for a perspective projection
+func GetPerspectiveProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D,
+	back float64) mat64.Matrix {
+
+	result := mat64.NewDense(4, 4, nil)
+	PRPx := PRP.At(0, 0)
+	PRPy := PRP.At(1, 0)
+	PRPz := PRP.At(2, 0)
+	umin := ViewPlane.XMin
+	umax := ViewPlane.XMax
+	vmin := ViewPlane.YMin
+	vmax := ViewPlane.YMax
+
+	// Row 1
+	result.Set(0, 0,
+		((2 * PRPz) / ((umax - umin) * (PRPz - back))))
+
+	result.Set(0, 1, 0)
+
+	result.Set(0, 2,
+		(((umax + umin) - (2 * PRPx)) / ((umax - umin) * (PRPz - back))))
+
+	result.Set(0, 3,
+		-(((umax + umin) * PRPz) / ((umax - umin) * (PRPz - back))))
+
+	// Row 2
+	result.Set(1, 0, 0)
+
+	result.Set(1, 1,
+		((2 * PRPz) / ((vmax - vmin) * (PRPz - back))))
+
+	result.Set(1, 2,
+		(((vmax + vmin) - (2 * PRPy)) / ((vmax - vmin) * (PRPz - back))))
+
+	result.Set(1, 3,
+		-(((vmax + vmin) * PRPz) / ((vmax - vmin) * (PRPz - back))))
+
+	// Row 3
+	result.Set(2, 0, 0)
+
+	result.Set(2, 1, 0)
+
+	result.Set(2, 2,
+		(1 / (PRPz - back)))
+
+	result.Set(2, 3,
+		-(PRPz / (PRPz - back)))
+
+	// Row 4
+	result.SetRow(3, []float64{0, 0, 0, 1})
+
+	return result
+}
+
+// GetOrthographicProjectionMatrix returns the matrix used to transform 3D
+// vertices to the canonical view volume for a orthographic projection
+func GetOrthographicProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D, front,
+	back float64) mat64.Matrix {
+
+	result := mat64.NewDense(4, 4, nil)
+	PRPx := PRP.At(0, 0)
+	PRPy := PRP.At(1, 0)
+	PRPz := PRP.At(2, 0)
+	umin := ViewPlane.XMin
+	umax := ViewPlane.XMax
+	vmin := ViewPlane.YMin
+	vmax := ViewPlane.YMax
+
+	// Row 1
+	result.Set(0, 0,
+		(2 / (umax - umin)))
+
+	result.Set(0, 1, 0)
+
+	result.Set(0, 2,
+		(((umax + umin) - (2 * PRPx)) / ((umax - umin) * PRPz)))
+
+	result.Set(0, 3,
+		-((umax + umin) / 2))
+
+	// Row 2
+	result.Set(1, 0, 0)
+
+	result.Set(1, 1,
+		(2 / (vmax - vmin)))
+
+	result.Set(1, 2,
+		(((vmax + vmin) - (2 * PRPy)) / ((vmax - vmin) * PRPz)))
+
+	result.Set(1, 3,
+		-((vmax + vmin) / 2))
+
+	// Row 3
+	result.Set(2, 0, 0)
+
+	result.Set(2, 1, 0)
+
+	result.Set(2, 2,
+		(1 / (front - back)))
+
+	result.Set(2, 3,
+		-(front / (front - back)))
+
+	// Row 4
+	result.SetRow(3, []float64{0, 0, 0, 1})
+
+	return result
+}
+
+// StripVector returns a slice of the values in a mat64.Vector
+func StripVector(vector *mat64.Vector) []float64 {
+	return vector.RawVector().Data
 }
 
 /* Line */
@@ -697,7 +826,7 @@ func (geo *Geometry) Transform(matrix mat64.Matrix) {
 		vector.ScaleVec(homogScale, vector)
 
 		// Put the new vertex data back
-		vertex.attributes = vector.RawVector().Data
+		vertex.attributes = StripVector(vector)
 	}
 }
 
@@ -857,7 +986,7 @@ func (geo *Geometry) AddVertex(vertex *Vertex) {
 // Print prints the points in this Geometry
 func (geo *Geometry) Print() {
 	for _, vertex := range geo.vertices {
-		vertex.Print()
+		fmt.Printf("%s\n", vertex.String())
 	}
 }
 
@@ -1084,7 +1213,71 @@ func (file *File) Close() {
 
 // ParseSMFObjects parses objects from an SMF file
 func (file *File) ParseSMFObjects() ([]Drawable, error) {
-	return nil, nil
+	scanner := file.scanner
+	var err error
+	var vertices []*Vertex
+	var result []Drawable
+	for scanner.Scan() {
+		line := scanner.Text()
+		tokens := strings.Fields(line)
+
+		if len(tokens) < 1 {
+			err = fmt.Errorf("Bad SMF line format on line %d",
+				file.lineIdx)
+			break
+		}
+		if tokens[0] == "v" {
+			if len(tokens) < 4 {
+				err = fmt.Errorf("Line %d: Three coordinates required", file.lineIdx)
+				break
+			}
+			var x, y, z float64
+			x, err = strconv.ParseFloat(tokens[1], 64)
+			y, err = strconv.ParseFloat(tokens[2], 64)
+			z, err = strconv.ParseFloat(tokens[3], 64)
+
+			if err != nil {
+				break
+			}
+
+			vertex := Create3DVertex(x, y, z)
+			vertices = append(vertices, vertex)
+
+		} else if tokens[0] == "f" {
+			geo := &Geometry{}
+			if len(tokens) < 4 {
+				err = fmt.Errorf("Line %d: A face needs at least three"+
+					" vertices", file.lineIdx)
+				break
+			}
+			for i := 1; i < len(tokens); i++ {
+				vidx, err := strconv.Atoi(tokens[i])
+				if err != nil {
+					break
+				}
+				if vidx < 0 || vidx >= len(vertices) {
+					err = fmt.Errorf("Line %d: Invalid vertex index", file.lineIdx)
+					break
+				}
+				geo.vertices = append(geo.vertices, vertices[vidx])
+			}
+
+			if err != nil {
+				break
+			}
+
+			result = append(result, geo)
+			geo.Print()
+
+		} else {
+			err = fmt.Errorf("Line %d: Invalid SMF token", file.lineIdx)
+			break
+		}
+
+		file.lineIdx++
+	}
+
+	return result, err
 }
 
 // OpenPostScriptFile opens the PostScript file at the given path
