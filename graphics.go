@@ -506,9 +506,55 @@ func GetOrthographicProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D, front,
 	return result
 }
 
+// GetViewMatrix returns the matrix to be used to transform vertices to a camera
+// view based on the given parameters.
+func GetViewMatrix(VPN, VUP *mat64.Vector) *mat64.Matrix {
+	// Calculate the camera coordinate axes
+	//n := VPN
+
+	//var u, v *mat64.Vector
+
+	return nil
+}
+
+// VectorCrossProduct returns the cross product of two 3d vectors
+func VectorCrossProduct(a, b *mat64.Vector) *mat64.Vector {
+	crossMatrix := mat64.NewDense(2, 3, nil)
+	crossMatrix.Stack(a.T(), b.T())
+
+	fmt.Printf("%v\n", mat64.Formatted(crossMatrix))
+
+	xTermMatrix := mat64.NewDense(2, 2, nil)
+	setCol(xTermMatrix, 0, crossMatrix.ColView(1))
+	setCol(xTermMatrix, 1, crossMatrix.ColView(2))
+
+	yTermMatrix := mat64.NewDense(2, 2, nil)
+	setCol(yTermMatrix, 0, crossMatrix.ColView(0))
+	setCol(yTermMatrix, 1, crossMatrix.ColView(2))
+
+	zTermMatrix := mat64.NewDense(2, 2, nil)
+	setCol(zTermMatrix, 0, crossMatrix.ColView(0))
+	setCol(zTermMatrix, 1, crossMatrix.ColView(1))
+
+	return mat64.NewVector(3, []float64{
+		mat64.Det(xTermMatrix),
+		-mat64.Det(yTermMatrix),
+		mat64.Det(zTermMatrix)})
+
+}
+
+func setCol(mat *mat64.Dense, j int, vec *mat64.Vector) {
+	mat.SetCol(j, stripVector(vec))
+}
+
 // StripVector returns a slice of the values in a mat64.Vector
-func StripVector(vector *mat64.Vector) []float64 {
-	return vector.RawVector().Data
+func stripVector(vector *mat64.Vector) []float64 {
+	var res []float64
+	for i := 0; i < vector.Len(); i++ {
+		res = append(res, vector.At(i, 0))
+	}
+
+	return res
 }
 
 /* Line */
@@ -826,7 +872,7 @@ func (geo *Geometry) Transform(matrix mat64.Matrix) {
 		vector.ScaleVec(homogScale, vector)
 
 		// Put the new vertex data back
-		vertex.attributes = StripVector(vector)
+		vertex.attributes = stripVector(vector)
 	}
 }
 
@@ -1267,7 +1313,7 @@ func (file *File) ParseSMFObjects() ([]Drawable, error) {
 			}
 
 			result = append(result, geo)
-			geo.Print()
+			//geo.Print()
 
 		} else {
 			err = fmt.Errorf("Line %d: Invalid SMF token", file.lineIdx)
