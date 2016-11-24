@@ -16,17 +16,6 @@ import (
 	"github.com/gonum/matrix/mat64"
 )
 
-/* ----Interfaces---- */
-
-// Drawable is some kind of geometry that can be rasterized to a frame buffer
-type Drawable interface {
-	Draw(buffer *SoftFrameBuffer)
-	Clip(buffer Port2D) bool
-	Transform(matrix mat64.Matrix)
-	Discretize()
-	Project(projectionMatrix mat64.Matrix, orthographic bool)
-}
-
 /* ----Structures---- */
 
 /* RGBColor */
@@ -184,11 +173,17 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	finalMatrix := mat64.NewDense(4, 4, nil)
 	finalMatrix.Mul(projectionMatrix, viewMatrix)
 
+	var filtered []*Geometry
 	// Project all vertices
 	for i := range scene.Objects {
 
-		scene.Objects[i].Project(finalMatrix, scene.UseOrthographicProjection)
+		inside := scene.Objects[i].Project(finalMatrix, scene.UseOrthographicProjection, scene)
+		if inside {
+			filtered = append(filtered, scene.Objects[i])
+		}
 	}
+
+	//scene.Objects = filtered
 
 	// Draw the projected vertices
 	for i := range scene.Objects {
@@ -616,8 +611,7 @@ func stripVector(vector *mat64.Vector) []float64 {
 
 // Line is a line
 type Line struct {
-	a, b              *Vertex
-	clippingAlgorithm func(*Line, Port2D) bool
+	a, b *Vertex
 }
 
 // CreateLine creates a line with the specified vertices and
@@ -627,13 +621,7 @@ func CreateLine(a, b *Vertex) *Line {
 	result := &Line{}
 	result.a = a
 	result.b = b
-	result.clippingAlgorithm = (*Line).cohenSutherlandClip
 	return result
-}
-
-// Clip clips the line to the given port
-func (line *Line) Clip(port Port2D) bool {
-	return line.clippingAlgorithm(line, port)
 }
 
 // Draw draws the line to the buffer
@@ -706,8 +694,9 @@ func (line *Line) Discretize() {
 }
 
 // Project projects the line from 3D to 2D
-func (line *Line) Project(projectionMatrix mat64.Matrix, orthographic bool) {
+func (line *Line) Project(projectionMatrix mat64.Matrix, orthographic bool, scene *Scene) bool {
 	//TODO lines can't be projected right now
+	return false
 }
 
 // Print prints the points in this line for debugging
@@ -724,94 +713,12 @@ func round(f float64) int {
 	return int(f)
 }
 
-const (
-	csWest  int = 1
-	csEast  int = 2
-	csSouth int = 4
-	csNorth int = 8
-)
-
-func (line *Line) cohenSutherlandClip(port Port2D) bool {
-	aCode := line.a.getCSBitcode(port)
-	bCode := line.b.getCSBitcode(port)
-	x0, y0, x1, y1 := line.UnpackFloat()
-
-	// Line completely out
-	if aCode&bCode != 0 {
-		return false
-	}
-
-	for aCode|bCode != 0 {
-		// Find the first bit flip
-		bitIdx := 1
-		for aCode&bitIdx == bCode&bitIdx {
-			bitIdx = bitIdx << 1
-		}
-
-		// "Fix" this flip by clipping a coordinate
-		var clippedVertex *Vertex
-		var xc, yc int
-		switch bitIdx {
-		case csWest:
-			xc = 0
-			yc = round(findYC(x0, x1, y0, y1, float64(port.XMin)))
-			clippedVertex = minX(line.a, line.b)
-
-		case csEast:
-			xc = int(port.XMax)
-			yc = round(findYC(x0, x1, y0, y1, float64(port.XMax)))
-			clippedVertex = maxX(line.a, line.b)
-
-		case csSouth:
-			yc = 0
-			xc = round(findXC(x0, x1, y0, y1, float64(port.YMin)))
-			clippedVertex = minY(line.a, line.b)
-
-		case csNorth:
-			yc = int(port.YMax)
-			xc = round(findXC(x0, x1, y0, y1, float64(port.YMax)))
-			clippedVertex = maxY(line.a, line.b)
-		}
-
-		clippedVertex.attributes[0] = float64(xc)
-		clippedVertex.attributes[1] = float64(yc)
-
-		// Recalculate bitcodes
-		aCode = line.a.getCSBitcode(port)
-		bCode = line.b.getCSBitcode(port)
-	}
-
-	return true
-}
-
 func findYC(x0, x1, y0, y1, clip float64) float64 {
 	return ((clip-x0)/(x1-x0))*(y1-y0) + y0
 }
 
 func findXC(x0, x1, y0, y1, clip float64) float64 {
 	return ((y1-clip)/(y1-y0))*(x0-x1) + x1
-}
-
-func (vertex *Vertex) getCSBitcode(port Port2D) int {
-
-	code := 0
-
-	x := vertex.attributes[0]
-	y := vertex.attributes[1]
-
-	if x < float64(port.XMin) {
-		code |= csWest
-	} else if x > float64(port.XMax) {
-		code |= csEast
-	}
-
-	if y < float64(port.YMin) {
-		code |= csSouth
-	} else if y > float64(port.YMax) {
-		code |= csNorth
-	}
-
-	return code
 }
 
 // UnpackInt returns this line's vertex coordinates as a sequence of integers
@@ -887,7 +794,6 @@ func swap(a, b *int) {
 // Geometry is some geometric form, comprised of vertices
 type Geometry struct {
 	vertices     []*Vertex
-	lines        []*Line
 	clippingFunc func(*Geometry, Port2D)
 }
 
@@ -898,9 +804,8 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 
 	for i := 0; i < len(geo.vertices)-1; i++ {
 		line := &Line{
-			a:                 geo.vertices[i],
-			b:                 geo.vertices[i+1],
-			clippingAlgorithm: (*Line).cohenSutherlandClip}
+			a: geo.vertices[i],
+			b: geo.vertices[i+1]}
 
 		//fmt.Printf("%s\n", geo.vertices[i].String())
 		line.Draw(buffer)
@@ -941,7 +846,7 @@ func (geo *Geometry) Transform(matrix mat64.Matrix) {
 
 // Project projects the geometry from 3D to 2D space given the viewport
 // transform matrix and projection type
-func (geo *Geometry) Project(projectionMatrix mat64.Matrix, orthographic bool) {
+func (geo *Geometry) Project(projectionMatrix mat64.Matrix, orthographic bool, scene *Scene) bool {
 	for i, vertex := range geo.vertices {
 		// Only project 3D vertices. If it's 2D here, it has already been
 		// projected
@@ -954,6 +859,11 @@ func (geo *Geometry) Project(projectionMatrix mat64.Matrix, orthographic bool) {
 
 		// Transform the view volume
 		vector.MulVec(projectionMatrix, vector)
+
+		// HACK!
+		if getPerspectiveBitCode(vertex, scene) != 0 {
+			return false
+		}
 
 		// Do projection if needed
 		if !orthographic {
@@ -970,6 +880,54 @@ func (geo *Geometry) Project(projectionMatrix mat64.Matrix, orthographic bool) {
 		geo.vertices[i].attributes = geo.vertices[i].attributes[:3]
 		geo.vertices[i].attributes[2] = 1
 	}
+
+	return true
+
+}
+
+func getPerspectiveBitCode(vertex *Vertex, scene *Scene) (code int) {
+	PRPz := scene.PRP.At(2, 0)
+	front := scene.FrontClippingPlane
+	back := scene.BackClippingPlane
+
+	zmin := (PRPz - front) / (back - PRPz)
+
+	x := vertex.attributes[0]
+	y := vertex.attributes[1]
+	z := vertex.attributes[2]
+
+	aboveC := 1
+	belowC := 1 << 1
+	rightC := 1 << 2
+	leftC := 1 << 3
+	behindC := 1 << 4
+	frontC := 1 << 5
+
+	if y > -z {
+		code |= aboveC
+	}
+
+	if y < z {
+		code |= belowC
+	}
+
+	if x > -z {
+		code |= rightC
+	}
+
+	if x < z {
+		code |= leftC
+	}
+
+	if z < -1 {
+		code |= behindC
+	}
+
+	if z > zmin {
+		code |= frontC
+	}
+
+	return
 
 }
 
@@ -1299,23 +1257,8 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 		return nil, errors.New("Detected incomplete polygon specification\n")
 	}
 
-	// It is useful to store the edges, too
-	for _, geometry := range res {
-		for i := 0; i < len(geometry.vertices)-1; i++ {
-			var edge *Line
-			edge = CreateLine(geometry.vertices[i], geometry.vertices[i+1])
-			geometry.lines = append(geometry.lines, edge)
-
-			//TODO use these lines in polygon drawing and clipping
-		}
-	}
-
 	return res, nil
 }
-
-// TODO this can definitely be refactored, this file logic is almost exactly
-// the same
-/* SMFFile */
 
 // File represents an input file that can be parsed for different input objects
 type File struct {
@@ -1428,131 +1371,6 @@ func (file *File) ParseSMFObjects() ([]*Geometry, error) {
 	return result, err
 }
 
-// OpenPostScriptFile opens the PostScript file at the given path
-func OpenPostScriptFile(path string) (*File, error) {
-
-	fp, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-
-	scanner := bufio.NewScanner(fp)
-
-	file := &File{
-		filePath: path,
-		handle:   fp,
-		scanner:  scanner,
-		lineIdx:  0}
-
-	return file, err
-}
-
-// ParsePSObjects parses all Drawable geometry objects out of a PostScriptFile
-func (file *File) ParsePSObjects() ([]Drawable, error) {
-
-	// Supported line tokens
-	BeginDelim := "%%%BEGIN"
-	EndDelim := "%%%END"
-	LineDelim := "Line"
-	PolygonDelims := make(map[string]bool)
-	PolygonDelims["moveto"] = true
-	PolygonDelims["lineto"] = true
-	PolygonDelims["stroke"] = true
-
-	var objects []Drawable
-	foundBegin := false
-
-	scanner := file.scanner
-	for !foundBegin && scanner.Scan() {
-		line := scanner.Text()
-		file.lineIdx++
-		if line == BeginDelim {
-			foundBegin = true
-		}
-	}
-	if !foundBegin {
-		err := errors.New("PostScript file did not have the correct BEGIN" +
-			" delimiter\n")
-		return objects, err
-	}
-
-	file.lineIdx++
-
-	// This contains all of the groups of lines we find that define a Polygon
-	var polygonLines []string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.Trim(line, " ")
-
-		if line == EndDelim {
-			break
-		}
-
-		tokens := strings.Fields(line)
-
-		// Skip blank lines
-		if line == "" {
-			file.lineIdx++
-			continue
-		}
-
-		delim := tokens[len(tokens)-1]
-
-		// Polygons
-		_, polygonDelimFound := PolygonDelims[delim]
-		if polygonDelimFound {
-			polygonLines = append(polygonLines, line)
-			file.lineIdx++
-			continue
-		}
-
-		// Single line objects
-		switch delim {
-		case LineDelim:
-			object := parseLineObject(tokens[:len(tokens)-1])
-			if object == nil {
-				errStr :=
-					fmt.Sprintf("Failed to parse %s object on line %d\n",
-						LineDelim, file.lineIdx)
-				return objects, errors.New(errStr)
-			}
-
-			objects = append(objects, object)
-
-			/*
-				// Some line debug stuff
-				line := object.(*Line)
-				fmt.Printf("Parsed object %#v\n", line)
-				fmt.Printf("%s\n%s\n", line.a.String(), line.b.String())
-			*/
-
-		default:
-			errStr := fmt.Sprintf("Unrecognized object delimiter %s on line"+
-				"%d\n",
-				delim, file.lineIdx)
-			return objects, errors.New(errStr)
-
-		}
-
-		file.lineIdx++
-
-	}
-
-	if len(polygonLines) > 0 {
-		polygons, err := parsePolygonObject(polygonLines)
-		if err != nil {
-			return objects, err
-		}
-		for _, polygon := range polygons {
-			objects = append(objects, polygon)
-		}
-	}
-
-	return objects, nil
-
-}
-
 /* XPMFile */
 
 // XPMFile is an XPM image file
@@ -1621,36 +1439,6 @@ func (file *XPMFile) WriteSoftBuffer(buffer *SoftFrameBuffer) error {
 	file.writer.Flush()
 
 	return err
-}
-
-/* ---PostScript object parsing routines--- */
-
-func parseLineObject(tokens []string) Drawable {
-	var points []int
-
-	for i := 0; i < 4; i++ {
-		num, err := strconv.Atoi(tokens[i])
-		if err != nil {
-			return nil
-		}
-		points = append(points, num)
-	}
-
-	a := &Vertex{}
-	a.AddAttribute(float64(points[0]))
-	a.AddAttribute(float64(points[1]))
-
-	b := &Vertex{}
-	b.AddAttribute(float64(points[2]))
-	b.AddAttribute(float64(points[3]))
-
-	res := &Line{
-		a:                 a,
-		b:                 b,
-		clippingAlgorithm: (*Line).cohenSutherlandClip}
-
-	return res
-
 }
 
 /* ----Misc routines---- */
