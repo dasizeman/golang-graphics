@@ -92,6 +92,9 @@ type Scene struct {
 	// Objects in the scene
 	Objects []*Geometry
 
+	// All vertices
+	Vertices []*Vertex
+
 	/*
 		// Global scene scale about world origin
 		Scale float64
@@ -133,29 +136,6 @@ type Scene struct {
 
 // Render renders the scene to the given buffer
 func (scene *Scene) Render(buffer *SoftFrameBuffer) {
-	// TODO have some way of toggling transformations
-	/*
-		    // Get the translation matrix
-		    translationMatrix :=
-			    GetTranslationTransformMatrix(float64(scene.XTranslation),
-				    float64(scene.YTranslation))
-
-		    // Get the rotation matrix
-		    rotationMatrix :=
-			    GetRotationTransformMatrix(scene.Rotation)
-
-		    // Get the scale matrix
-		    scaleMatrix := GetScaleTransformMatrix(float64(scene.Scale),
-			    float64(scene.Scale))
-
-		    // Compose the transformation matrix
-		    transformationMatrix := mat64.NewDense(3, 3, nil)
-		    transformationMatrix.Mul(rotationMatrix, scaleMatrix)
-
-		    transformationMatrix.Mul(translationMatrix, transformationMatrix)
-
-		    //fmt.Printf("%v\n", mat64.Formatted(transformationMatrix))
-	*/
 	// Get the view matrix
 	viewMatrix := GetViewMatrix(scene.VPN, scene.VUP, scene.VRP)
 
@@ -173,27 +153,45 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	finalMatrix := mat64.NewDense(4, 4, nil)
 	finalMatrix.Mul(projectionMatrix, viewMatrix)
 
-	var filtered []*Geometry
-	// Project all vertices
-	for i := range scene.Objects {
+	// Transform the viewport for all vertices
+	for _, vertex := range scene.Vertices[1:] {
+		// Create a column vector from the vertex
+		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
-		inside := scene.Objects[i].Project(finalMatrix, scene.UseOrthographicProjection, scene)
-		if inside {
-			filtered = append(filtered, scene.Objects[i])
+		// Transform the view volume
+		vector.MulVec(projectionMatrix, vector)
+
+		// Put the new vertex data back
+		vertex.attributes = stripVector(vector)
+
+		// TODO clip
+
+		vector = mat64.NewVector(len(vertex.attributes), vertex.attributes)
+
+		// Do projection if needed
+		if !scene.UseOrthographicProjection {
+			// For perspective projection, divide x and y by -z
+			for dim := 0; dim < 3; dim++ {
+				vector.SetVec(dim, vector.At(dim, 0)/-vector.At(2, 0))
+			}
 		}
-	}
 
-	//scene.Objects = filtered
+		// "Convert" the vertex back to 2D
+		vertex.attributes = vertex.attributes[:3]
+		vertex.attributes[2] = 1
 
-	// Draw the projected vertices
-	for i := range scene.Objects {
 		// Apply world-to-viewport transformation
 		canonicalViewport := Port2D{
 			XMin: -1,
 			YMin: -1,
 			XMax: 1,
 			YMax: 1}
-		scene.transformToViewport(scene.Objects[i], canonicalViewport)
+		scene.transformToViewport(vertex, canonicalViewport)
+
+	}
+
+	// Draw the projected vertices
+	for i := range scene.Objects {
 
 		scene.Objects[i].Discretize()
 		scene.Objects[i].Draw(buffer)
@@ -201,7 +199,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	}
 }
 
-func (scene *Scene) transformToViewport(object *Geometry, from Port2D) {
+func (scene *Scene) transformToViewport(vertex *Vertex, from Port2D) {
 
 	// Get the matrix to translate the world window to the origin
 	originTranslationMatrix :=
@@ -232,7 +230,7 @@ func (scene *Scene) transformToViewport(object *Geometry, from Port2D) {
 	transformationMatrix.Mul(viewportTranslationMatrix, transformationMatrix)
 
 	// Apply the transformation
-	object.Transform(transformationMatrix)
+	vertex.Transform(transformationMatrix)
 
 }
 
@@ -247,13 +245,13 @@ type Vertex struct {
 // Create2DVertex creates a vertex with the specified x and y coordinates
 func Create2DVertex(a, b float64) *Vertex {
 	// TODO use this where we create 2D vertices
-	result := &Vertex{}
-	result.AddAttribute(a)
-	result.AddAttribute(b)
+	polygons := &Vertex{}
+	polygons.AddAttribute(a)
+	polygons.AddAttribute(b)
 
 	// Homogenous
-	result.AddAttribute(1)
-	return result
+	polygons.AddAttribute(1)
+	return polygons
 }
 
 // Create2DVertexInt is a wrapper for Create2DVertex
@@ -264,15 +262,15 @@ func Create2DVertexInt(a, b int) *Vertex {
 
 // Create3DVertex creates a vertex with the specified x,y, and z coordinates
 func Create3DVertex(a, b, c float64) *Vertex {
-	result := &Vertex{}
-	result.AddAttribute(a)
-	result.AddAttribute(b)
-	result.AddAttribute(c)
+	polygons := &Vertex{}
+	polygons.AddAttribute(a)
+	polygons.AddAttribute(b)
+	polygons.AddAttribute(c)
 
 	// Homogenous
-	result.AddAttribute(1)
+	polygons.AddAttribute(1)
 
-	return result
+	return polygons
 }
 
 // AddAttribute adds an attribute to vertex
@@ -438,7 +436,7 @@ func GetPerspectiveProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D,
 	back float64) mat64.Matrix {
 
 	fmt.Println("Perspective\n")
-	result := mat64.NewDense(4, 4, nil)
+	polygons := mat64.NewDense(4, 4, nil)
 	PRPx := PRP.At(0, 0)
 	PRPy := PRP.At(1, 0)
 	PRPz := PRP.At(2, 0)
@@ -448,44 +446,44 @@ func GetPerspectiveProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D,
 	vmax := ViewPlane.YMax
 
 	// Row 1
-	result.Set(0, 0,
+	polygons.Set(0, 0,
 		((2 * PRPz) / ((umax - umin) * (PRPz - back))))
 
-	result.Set(0, 1, 0)
+	polygons.Set(0, 1, 0)
 
-	result.Set(0, 2,
+	polygons.Set(0, 2,
 		(((umax + umin) - (2 * PRPx)) / ((umax - umin) * (PRPz - back))))
 
-	result.Set(0, 3,
+	polygons.Set(0, 3,
 		-(((umax + umin) * PRPz) / ((umax - umin) * (PRPz - back))))
 
 	// Row 2
-	result.Set(1, 0, 0)
+	polygons.Set(1, 0, 0)
 
-	result.Set(1, 1,
+	polygons.Set(1, 1,
 		((2 * PRPz) / ((vmax - vmin) * (PRPz - back))))
 
-	result.Set(1, 2,
+	polygons.Set(1, 2,
 		(((vmax + vmin) - (2 * PRPy)) / ((vmax - vmin) * (PRPz - back))))
 
-	result.Set(1, 3,
+	polygons.Set(1, 3,
 		-(((vmax + vmin) * PRPz) / ((vmax - vmin) * (PRPz - back))))
 
 	// Row 3
-	result.Set(2, 0, 0)
+	polygons.Set(2, 0, 0)
 
-	result.Set(2, 1, 0)
+	polygons.Set(2, 1, 0)
 
-	result.Set(2, 2,
+	polygons.Set(2, 2,
 		(1 / (PRPz - back)))
 
-	result.Set(2, 3,
+	polygons.Set(2, 3,
 		-(PRPz / (PRPz - back)))
 
 	// Row 4
-	result.SetRow(3, []float64{0, 0, 0, 1})
+	polygons.SetRow(3, []float64{0, 0, 0, 1})
 
-	return result
+	return polygons
 }
 
 // GetOrthographicProjectionMatrix returns the matrix used to transform 3D
@@ -493,7 +491,7 @@ func GetPerspectiveProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D,
 func GetOrthographicProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D, front,
 	back float64) mat64.Matrix {
 
-	result := mat64.NewDense(4, 4, nil)
+	polygons := mat64.NewDense(4, 4, nil)
 	PRPx := PRP.At(0, 0)
 	PRPy := PRP.At(1, 0)
 	PRPz := PRP.At(2, 0)
@@ -503,44 +501,44 @@ func GetOrthographicProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D, front,
 	vmax := ViewPlane.YMax
 
 	// Row 1
-	result.Set(0, 0,
+	polygons.Set(0, 0,
 		(2 / (umax - umin)))
 
-	result.Set(0, 1, 0)
+	polygons.Set(0, 1, 0)
 
-	result.Set(0, 2,
+	polygons.Set(0, 2,
 		(((umax + umin) - (2 * PRPx)) / ((umax - umin) * PRPz)))
 
-	result.Set(0, 3,
+	polygons.Set(0, 3,
 		-((umax + umin) / 2))
 
 	// Row 2
-	result.Set(1, 0, 0)
+	polygons.Set(1, 0, 0)
 
-	result.Set(1, 1,
+	polygons.Set(1, 1,
 		(2 / (vmax - vmin)))
 
-	result.Set(1, 2,
+	polygons.Set(1, 2,
 		(((vmax + vmin) - (2 * PRPy)) / ((vmax - vmin) * PRPz)))
 
-	result.Set(1, 3,
+	polygons.Set(1, 3,
 		-((vmax + vmin) / 2))
 
 	// Row 3
-	result.Set(2, 0, 0)
+	polygons.Set(2, 0, 0)
 
-	result.Set(2, 1, 0)
+	polygons.Set(2, 1, 0)
 
-	result.Set(2, 2,
+	polygons.Set(2, 2,
 		(1 / (front - back)))
 
-	result.Set(2, 3,
+	polygons.Set(2, 3,
 		-(front / (front - back)))
 
 	// Row 4
-	result.SetRow(3, []float64{0, 0, 0, 1})
+	polygons.SetRow(3, []float64{0, 0, 0, 1})
 
-	return result
+	return polygons
 }
 
 // GetViewMatrix returns the matrix to be used to transform vertices to a camera
@@ -618,10 +616,10 @@ type Line struct {
 // a default clipping algorithm
 func CreateLine(a, b *Vertex) *Line {
 	//TODO use this where we make lines
-	result := &Line{}
-	result.a = a
-	result.b = b
-	return result
+	polygons := &Line{}
+	polygons.a = a
+	polygons.b = b
+	return polygons
 }
 
 // Draw draws the line to the buffer
@@ -825,64 +823,16 @@ func (geo *Geometry) Clip(port Port2D) bool {
 
 // Transform applies the given transformation matrix to the
 // geometry
-func (geo *Geometry) Transform(matrix mat64.Matrix) {
-	for i, vertex := range geo.vertices {
-		// TODO HACK! we don't need pointers here
-		if vertex.Transformed {
-			continue
-		}
-		// Create a column vector from the vertex
-		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
-		//fmt.Printf("%v\n", mat64.Formatted(vector))
+func (vertex *Vertex) Transform(matrix mat64.Matrix) {
+	// Create a column vector from the vertex
+	vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
+	//fmt.Printf("%v\n", mat64.Formatted(vector))
 
-		// Apply the transformation
-		vector.MulVec(matrix, vector)
+	// Apply the transformation
+	vector.MulVec(matrix, vector)
 
-		// Put the new vertex data back
-		geo.vertices[i].attributes = stripVector(vector)
-		geo.vertices[i].Transformed = true
-	}
-}
-
-// Project projects the geometry from 3D to 2D space given the viewport
-// transform matrix and projection type
-func (geo *Geometry) Project(projectionMatrix mat64.Matrix, orthographic bool, scene *Scene) bool {
-	for i, vertex := range geo.vertices {
-		// Only project 3D vertices. If it's 2D here, it has already been
-		// projected
-		//TODO this is where having Vertex pointers gets hairy
-		if len(vertex.attributes) < 4 {
-			continue
-		}
-		// Create a column vector from the vertex
-		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
-
-		// Transform the view volume
-		vector.MulVec(projectionMatrix, vector)
-
-		// HACK!
-		if getPerspectiveBitCode(vertex, scene) != 0 {
-			return false
-		}
-
-		// Do projection if needed
-		if !orthographic {
-			// For perspective projection, divide x and y by -z
-			for dim := 0; dim < 3; dim++ {
-				vector.SetVec(dim, vector.At(dim, 0)/-vector.At(2, 0))
-			}
-		}
-
-		// Put the new vertex data back
-		geo.vertices[i].attributes = stripVector(vector)
-
-		// "Convert" the vertex back to 2D
-		geo.vertices[i].attributes = geo.vertices[i].attributes[:3]
-		geo.vertices[i].attributes[2] = 1
-	}
-
-	return true
-
+	// Put the new vertex data back
+	vertex.attributes = stripVector(vector)
 }
 
 func getPerspectiveBitCode(vertex *Vertex, scene *Scene) (code int) {
@@ -1298,12 +1248,12 @@ func (file *File) Close() {
 }
 
 // ParseSMFObjects parses objects from an SMF file
-func (file *File) ParseSMFObjects() ([]*Geometry, error) {
+func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 	scanner := file.scanner
 	var err error
 	// Vertex indices must begin at 1
 	vertices := []*Vertex{nil}
-	var result []*Geometry
+	var polygons []*Geometry
 	for scanner.Scan() {
 		line := scanner.Text()
 		tokens := strings.Fields(line)
@@ -1357,7 +1307,7 @@ func (file *File) ParseSMFObjects() ([]*Geometry, error) {
 			closing := geo.vertices[0]
 			geo.vertices = append(geo.vertices, closing)
 
-			result = append(result, geo)
+			polygons = append(polygons, geo)
 			//geo.Print()
 
 		} else {
@@ -1368,7 +1318,7 @@ func (file *File) ParseSMFObjects() ([]*Geometry, error) {
 		file.lineIdx++
 	}
 
-	return result, err
+	return polygons, vertices, err
 }
 
 /* XPMFile */
