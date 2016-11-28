@@ -159,7 +159,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
 		// Transform the view volume
-		vector.MulVec(projectionMatrix, vector)
+		vector.MulVec(finalMatrix, vector)
 
 		// Put the new vertex data back
 		vertex.attributes = stripVector(vector)
@@ -541,17 +541,32 @@ func GetOrthographicProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D, front,
 	return polygons
 }
 
+// Normalize3Vector normalizes a 3D vector
+func Normalize3Vector(vector *mat64.Vector) {
+	normFactor := math.Sqrt(math.Pow(vector.At(0, 0), 2) +
+		math.Pow(vector.At(1, 0), 2) +
+		math.Pow(vector.At(2, 0), 2))
+
+	vector.SetVec(0, vector.At(0, 0)/normFactor)
+	vector.SetVec(1, vector.At(1, 0)/normFactor)
+	vector.SetVec(2, vector.At(2, 0)/normFactor)
+
+}
+
 // GetViewMatrix returns the matrix to be used to transform vertices to a camera
 // view based on the given parameters.
 func GetViewMatrix(VPN, VUP, VRP *mat64.Vector) mat64.Matrix {
 	// Calculate the camera coordinate axes
 	n := VPN
+	Normalize3Vector(n)
 	u := VectorCrossProduct(VUP, VPN)
+	Normalize3Vector(u)
 	v := VectorCrossProduct(n, u)
+	Normalize3Vector(v)
 
 	// Get a translation matrix of -VRP
 	translationMatrix :=
-		GetTranslationTransformMatrix3D(VRP.At(0, 0), VRP.At(1, 0), VRP.At(2, 0))
+		GetTranslationTransformMatrix3D(-VRP.At(0, 0), -VRP.At(1, 0), -VRP.At(2, 0))
 
 	// Create a rotation matrix based on the camera axes
 	rotationMatrix := mat64.NewDense(4, 4, []float64{
