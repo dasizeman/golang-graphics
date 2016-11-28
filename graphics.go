@@ -147,8 +147,8 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		projectionMatrix = GetPerspectiveProjectionMatrix(scene.PRP, scene.ViewPlane,
 			scene.BackClippingPlane)
 	}
-	//fmt.Printf("%v\n", mat64.Formatted(viewMatrix))
-	//fmt.Printf("%v\n", mat64.Formatted(projectionMatrix))
+	fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(viewMatrix))
+	fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(projectionMatrix))
 
 	finalMatrix := mat64.NewDense(4, 4, nil)
 	finalMatrix.Mul(projectionMatrix, viewMatrix)
@@ -161,12 +161,20 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		// Transform the view volume
 		vector.MulVec(finalMatrix, vector)
 
-		// Put the new vertex data back
 		vertex.attributes = stripVector(vector)
+	}
 
-		// TODO clip
+	var filteredPolygons []*Geometry
+	for _, polygon := range scene.Objects {
+		if isPolygonValid(polygon, scene) {
+			filteredPolygons = append(filteredPolygons, polygon)
+		}
+	}
 
-		vector = mat64.NewVector(len(vertex.attributes), vertex.attributes)
+	// Project all the vertices
+	for _, vertex := range scene.Vertices[1:] {
+		// Create a column vector from the vertex
+		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
 		// Do projection if needed
 		if !scene.UseOrthographicProjection {
@@ -175,6 +183,9 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 				vector.SetVec(dim, vector.At(dim, 0)/-vector.At(2, 0))
 			}
 		}
+
+		// Put the new vertex data back
+		vertex.attributes = stripVector(vector)
 
 		// "Convert" the vertex back to 2D
 		vertex.attributes = vertex.attributes[:3]
@@ -187,16 +198,31 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 			XMax: 1,
 			YMax: 1}
 		scene.transformToViewport(vertex, canonicalViewport)
-
 	}
 
 	// Draw the projected vertices
-	for i := range scene.Objects {
+	for i := range filteredPolygons {
 
 		scene.Objects[i].Discretize()
 		scene.Objects[i].Draw(buffer)
 
 	}
+}
+
+func isPolygonValid(geo *Geometry, scene *Scene) bool {
+	var checker func(*Vertex, *Scene) int
+	if scene.UseOrthographicProjection {
+		checker = getOrthogonalBitCode
+	} else {
+		checker = getPerspectiveBitCode
+	}
+	valid := true
+	for _, vertex := range geo.vertices {
+		if checker(vertex, scene) != 0 {
+			valid = false
+		}
+	}
+	return valid
 }
 
 func (scene *Scene) transformToViewport(vertex *Vertex, from Port2D) {
@@ -558,10 +584,10 @@ func Normalize3Vector(vector *mat64.Vector) {
 func GetViewMatrix(VPN, VUP, VRP *mat64.Vector) mat64.Matrix {
 	// Calculate the camera coordinate axes
 	n := VPN
-	Normalize3Vector(n)
 	u := VectorCrossProduct(VUP, VPN)
-	Normalize3Vector(u)
 	v := VectorCrossProduct(n, u)
+	Normalize3Vector(n)
+	Normalize3Vector(u)
 	Normalize3Vector(v)
 
 	// Get a translation matrix of -VRP
@@ -889,6 +915,47 @@ func getPerspectiveBitCode(vertex *Vertex, scene *Scene) (code int) {
 	}
 
 	if z > zmin {
+		code |= frontC
+	}
+
+	return
+
+}
+
+func getOrthogonalBitCode(vertex *Vertex, scene *Scene) (code int) {
+
+	x := vertex.attributes[0]
+	y := vertex.attributes[1]
+	z := vertex.attributes[2]
+
+	aboveC := 1
+	belowC := 1 << 1
+	rightC := 1 << 2
+	leftC := 1 << 3
+	behindC := 1 << 4
+	frontC := 1 << 5
+
+	if y > 1 {
+		code |= aboveC
+	}
+
+	if y < -1 {
+		code |= belowC
+	}
+
+	if x > 1 {
+		code |= rightC
+	}
+
+	if x < -1 {
+		code |= leftC
+	}
+
+	if z < -1 {
+		code |= behindC
+	}
+
+	if z > 0 {
 		code |= frontC
 	}
 
