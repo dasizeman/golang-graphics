@@ -31,6 +31,7 @@ type RGBColor struct {
 type SoftFrameBuffer struct {
 	Width, Height int
 	buffer        [][]RGBColor
+	zBuffer       [][]float64
 	colors        map[RGBColor]string
 }
 
@@ -41,21 +42,22 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 		Width:  width,
 		Height: height}
 
-	newBuffer.colors = make(map[RGBColor]string)
-
-	white := RGBColor{255, 255, 255}
 	black := RGBColor{0, 0, 0}
-	// Hard code black and white for now
-	newBuffer.colors[white] = "#"
-	newBuffer.colors[black] = "*"
+	white := RGBColor{255, 255, 255}
+
+	newBuffer.colors = make(map[RGBColor]string)
+	newBuffer.colors[white] = "*"
+	newBuffer.colors[black] = "#"
 
 	// Allocate the pixel buffer
 	newBuffer.buffer = make([][]RGBColor, newBuffer.Height)
+	newBuffer.zBuffer = make([][]float64, newBuffer.Height)
 	for y := range newBuffer.buffer {
 		newBuffer.buffer[y] = make([]RGBColor, newBuffer.Width)
+		newBuffer.zBuffer[y] = make([]float64, newBuffer.Width)
 	}
 
-	// Set the buffer to white
+	// Set the buffer to black
 	for y := 0; y < newBuffer.Height; y++ {
 		for x := 0; x < newBuffer.Width; x++ {
 			newBuffer.WritePixel(x, y, white)
@@ -65,15 +67,61 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 	return newBuffer
 }
 
+func (frameBuffer *SoftFrameBuffer) writeDepthCueColor(z, front, back float64, x, y int, baseColor RGBColor) {
+
+	// Calculate the scale factor based on the distance from the back
+	scale := (z - back) / (front - back)
+
+	// Scale the base color
+	scaledColor := scaleColor(baseColor, scale)
+
+	// Add the color to the buffer's color map
+	frameBuffer.colors[scaledColor] = get20ColorXPMCode(scaledColor)
+
+	// Write the pixel
+	frameBuffer.WritePixel(x, y, scaledColor)
+
+}
+
+func get20ColorXPMCode(color RGBColor) string {
+	code := ""
+	currentColor := &color.R
+	for i := 0; i < 3; i++ {
+		// Map the channel value to an ascii value between 48 and 68
+		ascii := 48 + (*currentColor/255)*20
+		code += string(ascii)
+
+		if currentColor == &color.R {
+			currentColor = &color.G
+		} else {
+			currentColor = &color.B
+		}
+	}
+
+	return code
+}
+
+func scaleColor(color RGBColor, scale float64) RGBColor {
+	return RGBColor{
+		byte(float64(color.R) / scale),
+		byte(float64(color.G) / scale),
+		byte(float64(color.B) / scale)}
+}
+
+func (frameBuffer *SoftFrameBuffer) updateZBuffer(x, y int, z float64) bool {
+	if z <= frameBuffer.zBuffer[y][x] {
+		return false
+	}
+	frameBuffer.zBuffer[y][x] = z
+	return true
+}
+
 // WritePixel writes a pixel color to the buffer, assuming (0,0) is the
 //bottom-left corner
 func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 
 	// We will reverse the y origin for compatibility with XPM output
 	frameBuffer.buffer[frameBuffer.Height-y-1][x] = color
-
-	// Add this to our set of colors
-	//frameBuffer.colors[color] = GenerateHexString(color)
 
 }
 
@@ -662,7 +710,7 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	var x, y, start, end int
 	var dy, dx, fx, fy float64
 
-	black := RGBColor{0, 0, 0}
+	white := RGBColor{0, 0, 0}
 
 	m := float64(ry-qy) / float64(rx-qx)
 
@@ -700,7 +748,7 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	fx = float64(x)
 	fy = float64(y)
 	for i := start; i <= end; i++ {
-		buffer.WritePixel(round(fx), round(fy), black)
+		buffer.WritePixel(round(fx), round(fy), white)
 
 		fx = fx + dx
 		fy = fy + dy
@@ -1280,15 +1328,21 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 
 // File represents an input file that can be parsed for different input objects
 type File struct {
+	filePath string
+	handle   *os.File
+	scanner  *bufio.Scanner
+	lineIdx  int
+}
+
+// SMFFile is an SMF input file
+type SMFFile struct {
+	Fp                     *File
 	vertexDelim, faceDelim string
-	filePath               string
-	handle                 *os.File
-	scanner                *bufio.Scanner
-	lineIdx                int
+	BaseColor              RGBColor
 }
 
 // OpenSMFFile opens the SMF file at the given path
-func OpenSMFFile(path string) (*File, error) {
+func OpenSMFFile(path string) (*SMFFile, error) {
 
 	fp, err := os.Open(path)
 	if err != nil {
@@ -1303,11 +1357,14 @@ func OpenSMFFile(path string) (*File, error) {
 		scanner:  scanner,
 		lineIdx:  0}
 
-	// Supported line tokens
-	file.vertexDelim = "v"
-	file.faceDelim = "f"
+	smfFile := &SMFFile{
+		Fp: file}
 
-	return file, err
+	// Supported line tokens
+	smfFile.vertexDelim = "v"
+	smfFile.faceDelim = "f"
+
+	return smfFile, err
 }
 
 // Close closes this SMFFile
@@ -1316,8 +1373,8 @@ func (file *File) Close() {
 }
 
 // ParseSMFObjects parses objects from an SMF file
-func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
-	scanner := file.scanner
+func (file *SMFFile) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
+	scanner := file.Fp.scanner
 	var err error
 	// Vertex indices must begin at 1
 	vertices := []*Vertex{nil}
@@ -1328,12 +1385,12 @@ func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 
 		if len(tokens) < 1 {
 			err = fmt.Errorf("Bad SMF line format on line %d",
-				file.lineIdx)
+				file.Fp.lineIdx)
 			break
 		}
-		if tokens[0] == "v" {
+		if tokens[0] == file.vertexDelim {
 			if len(tokens) < 4 {
-				err = fmt.Errorf("Line %d: Three coordinates required", file.lineIdx)
+				err = fmt.Errorf("Line %d: Three coordinates required", file.Fp.lineIdx)
 				break
 			}
 			var x, y, z float64
@@ -1348,11 +1405,11 @@ func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 			vertex := Create3DVertex(x, y, z)
 			vertices = append(vertices, vertex)
 
-		} else if tokens[0] == "f" {
+		} else if tokens[0] == file.faceDelim {
 			geo := &Geometry{}
 			if len(tokens) < 4 {
 				err = fmt.Errorf("Line %d: A face needs at least three"+
-					" vertices", file.lineIdx)
+					" vertices", file.Fp.lineIdx)
 				break
 			}
 			for i := 1; i < len(tokens); i++ {
@@ -1361,7 +1418,7 @@ func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 					break
 				}
 				if vidx < 0 || vidx >= len(vertices) {
-					err = fmt.Errorf("Line %d: Invalid vertex index", file.lineIdx)
+					err = fmt.Errorf("Line %d: Invalid vertex index", file.Fp.lineIdx)
 					break
 				}
 				geo.vertices = append(geo.vertices, vertices[vidx])
@@ -1379,11 +1436,11 @@ func (file *File) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 			//geo.Print()
 
 		} else {
-			err = fmt.Errorf("Line %d: Invalid SMF token", file.lineIdx)
+			err = fmt.Errorf("Line %d: Invalid SMF token", file.Fp.lineIdx)
 			break
 		}
 
-		file.lineIdx++
+		file.Fp.lineIdx++
 	}
 
 	return polygons, vertices, err
