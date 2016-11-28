@@ -147,8 +147,8 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		projectionMatrix = GetPerspectiveProjectionMatrix(scene.PRP, scene.ViewPlane,
 			scene.BackClippingPlane)
 	}
-	fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(viewMatrix))
-	fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(projectionMatrix))
+	//fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(viewMatrix))
+	//fmt.Fprintf(os.Stderr, "%v\n", mat64.Formatted(projectionMatrix))
 
 	finalMatrix := mat64.NewDense(4, 4, nil)
 	finalMatrix.Mul(projectionMatrix, viewMatrix)
@@ -203,8 +203,8 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	// Draw the projected vertices
 	for i := range filteredPolygons {
 
-		scene.Objects[i].Discretize()
-		scene.Objects[i].Draw(buffer)
+		filteredPolygons[i].Discretize()
+		filteredPolygons[i].Draw(buffer)
 
 	}
 }
@@ -608,27 +608,13 @@ func GetViewMatrix(VPN, VUP, VRP *mat64.Vector) mat64.Matrix {
 
 // VectorCrossProduct returns the cross product of two 3d vectors
 func VectorCrossProduct(a, b *mat64.Vector) *mat64.Vector {
-	crossMatrix := mat64.NewDense(2, 3, nil)
-	crossMatrix.Stack(a.T(), b.T())
+	result := mat64.NewVector(3, []float64{
 
-	//fmt.Printf("%v\n", mat64.Formatted(crossMatrix))
+		a.At(1, 0)*b.At(2, 0) - a.At(2, 0)*b.At(1, 0),
+		a.At(2, 0)*b.At(0, 0) - a.At(0, 0)*b.At(2, 0),
+		a.At(0, 0)*b.At(1, 0) - a.At(1, 0)*b.At(0, 0)})
 
-	xTermMatrix := mat64.NewDense(2, 2, nil)
-	setCol(xTermMatrix, 0, crossMatrix.ColView(1))
-	setCol(xTermMatrix, 1, crossMatrix.ColView(2))
-
-	yTermMatrix := mat64.NewDense(2, 2, nil)
-	setCol(yTermMatrix, 0, crossMatrix.ColView(0))
-	setCol(yTermMatrix, 1, crossMatrix.ColView(2))
-
-	zTermMatrix := mat64.NewDense(2, 2, nil)
-	setCol(zTermMatrix, 0, crossMatrix.ColView(0))
-	setCol(zTermMatrix, 1, crossMatrix.ColView(1))
-
-	return mat64.NewVector(3, []float64{
-		mat64.Det(xTermMatrix),
-		-mat64.Det(yTermMatrix),
-		mat64.Det(zTermMatrix)})
+	return result
 
 }
 
