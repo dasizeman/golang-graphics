@@ -43,11 +43,8 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 		Height: height}
 
 	black := RGBColor{0, 0, 0}
-	white := RGBColor{255, 255, 255}
 
 	newBuffer.colors = make(map[RGBColor]string)
-	newBuffer.colors[white] = "*"
-	newBuffer.colors[black] = "#"
 
 	// Allocate the pixel buffer
 	newBuffer.buffer = make([][]RGBColor, newBuffer.Height)
@@ -57,10 +54,11 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 		newBuffer.zBuffer[y] = make([]float64, newBuffer.Width)
 	}
 
-	// Set the buffer to black
+	// Set the buffer to black and initialize z buffer
 	for y := 0; y < newBuffer.Height; y++ {
 		for x := 0; x < newBuffer.Width; x++ {
-			newBuffer.WritePixel(x, y, white)
+			newBuffer.WritePixel(x, y, black)
+			newBuffer.zBuffer[y][x] = -1
 		}
 	}
 
@@ -69,14 +67,12 @@ func NewSoftFrameBuffer(width, height int) *SoftFrameBuffer {
 
 func (frameBuffer *SoftFrameBuffer) writeDepthCueColor(z, front, back float64, x, y int, baseColor RGBColor) {
 
+	//fmt.Fprintf(os.Stderr, "%f\n", z)
 	// Calculate the scale factor based on the distance from the back
 	scale := (z - back) / (front - back)
 
 	// Scale the base color
 	scaledColor := scaleColor(baseColor, scale)
-
-	// Add the color to the buffer's color map
-	frameBuffer.colors[scaledColor] = get20ColorXPMCode(scaledColor)
 
 	// Write the pixel
 	frameBuffer.WritePixel(x, y, scaledColor)
@@ -88,8 +84,8 @@ func get20ColorXPMCode(color RGBColor) string {
 	currentColor := &color.R
 	for i := 0; i < 3; i++ {
 		// Map the channel value to an ascii value between 48 and 68
-		ascii := 48 + (*currentColor/255)*20
-		code += string(ascii)
+		ascii := 48 + (float64(*currentColor)/255)*20
+		code += string(int(ascii))
 
 		if currentColor == &color.R {
 			currentColor = &color.G
@@ -123,6 +119,9 @@ func (frameBuffer *SoftFrameBuffer) WritePixel(x, y int, color RGBColor) {
 	// We will reverse the y origin for compatibility with XPM output
 	frameBuffer.buffer[frameBuffer.Height-y-1][x] = color
 
+	// Add the color to the buffer's color map
+	frameBuffer.colors[color] = get20ColorXPMCode(color)
+
 }
 
 /* Port */
@@ -138,7 +137,7 @@ type Port2D struct {
 // Scene is a virtual space that can be rendered to a frame buffer
 type Scene struct {
 	// Objects in the scene
-	Objects []*Geometry
+	Objects []Geometry
 
 	// All vertices
 	Vertices []*Vertex
@@ -212,7 +211,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		vertex.attributes = stripVector(vector)
 	}
 
-	var filteredPolygons []*Geometry
+	var filteredPolygons []Geometry
 	for _, polygon := range scene.Objects {
 		if isPolygonValid(polygon, scene) {
 			filteredPolygons = append(filteredPolygons, polygon)
@@ -227,7 +226,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		// Do projection if needed
 		if !scene.UseOrthographicProjection {
 			// For perspective projection, divide x and y by -z
-			for dim := 0; dim < 3; dim++ {
+			for dim := 0; dim < 2; dim++ {
 				vector.SetVec(dim, vector.At(dim, 0)/-vector.At(2, 0))
 			}
 		}
@@ -236,8 +235,8 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 		vertex.attributes = stripVector(vector)
 
 		// "Convert" the vertex back to 2D
-		vertex.attributes = vertex.attributes[:3]
-		vertex.attributes[2] = 1
+		//vertex.attributes = vertex.attributes[:3]
+		//vertex.attributes[2] = 1
 
 		// Apply world-to-viewport transformation
 		canonicalViewport := Port2D{
@@ -252,12 +251,13 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	for i := range filteredPolygons {
 
 		filteredPolygons[i].Discretize()
-		filteredPolygons[i].Draw(buffer)
+		filteredPolygons[i].scanFill(buffer, scene)
+		//filteredPolygons[i].Draw(buffer)
 
 	}
 }
 
-func isPolygonValid(geo *Geometry, scene *Scene) bool {
+func isPolygonValid(geo Geometry, scene *Scene) bool {
 	var checker func(*Vertex, *Scene) int
 	if scene.UseOrthographicProjection {
 		checker = getOrthogonalBitCode
@@ -277,8 +277,8 @@ func (scene *Scene) transformToViewport(vertex *Vertex, from Port2D) {
 
 	// Get the matrix to translate the world window to the origin
 	originTranslationMatrix :=
-		GetTranslationTransformMatrix(-float64(from.XMin),
-			-float64(from.YMin))
+		GetTranslationTransformMatrix3D(-float64(from.XMin),
+			-float64(from.YMin), 0)
 	//fmt.Printf("%v\n", mat64.Formatted(originTranslationMatrix))
 
 	// Get the scale matrix
@@ -289,17 +289,17 @@ func (scene *Scene) transformToViewport(vertex *Vertex, from Port2D) {
 		float64(from.YMax-from.YMin)
 
 	viewportScaleMatrix :=
-		GetScaleTransformMatrix(xScale, yScale)
+		GetScaleTransformMatrix3D(xScale, yScale, 1)
 	//fmt.Printf("%v\n", mat64.Formatted(viewportScaleMatrix))
 
 	// Get the matrix to translate the viewport to the desired location
 	viewportTranslationMatrix :=
-		GetTranslationTransformMatrix(float64(scene.Viewport.XMin),
-			float64(scene.Viewport.YMin))
+		GetTranslationTransformMatrix3D(float64(scene.Viewport.XMin),
+			float64(scene.Viewport.YMin), 0)
 	//fmt.Printf("%v\n", mat64.Formatted(viewportTranslationMatrix))
 
 	// Compose the final transformation matrix
-	transformationMatrix := mat64.NewDense(3, 3, nil)
+	transformationMatrix := mat64.NewDense(4, 4, nil)
 	transformationMatrix.Mul(viewportScaleMatrix, originTranslationMatrix)
 	transformationMatrix.Mul(viewportTranslationMatrix, transformationMatrix)
 
@@ -710,7 +710,7 @@ func (line *Line) Draw(buffer *SoftFrameBuffer) {
 	var x, y, start, end int
 	var dy, dx, fx, fy float64
 
-	white := RGBColor{0, 0, 0}
+	white := RGBColor{255, 255, 255}
 
 	m := float64(ry-qy) / float64(rx-qx)
 
@@ -773,9 +773,9 @@ func (line *Line) Project(projectionMatrix mat64.Matrix, orthographic bool, scen
 }
 
 // Print prints the points in this line for debugging
-func (line *Line) Print() {
-	x0, y0, x1, y1 := line.UnpackFloat()
-	fmt.Printf("[%f,%f]\n[%f,%f]\n", x0, y0, x1, y1)
+func (line *Line) String() string {
+	x0, y0, z0, x1, y1, z1 := line.UnpackFloat()
+	return fmt.Sprintf("[%f,%f,%f]\n[%f,%f,%f]\n", x0, y0, z0, x1, y1, z1)
 }
 
 func round(f float64) int {
@@ -805,11 +805,13 @@ func (line *Line) UnpackInt() (qx, qy, rx, ry int) {
 }
 
 // UnpackFloat returns this line's vertex coordinates as a sequence of floats
-func (line *Line) UnpackFloat() (qx, qy, rx, ry float64) {
+func (line *Line) UnpackFloat() (qx, qy, qz, rx, ry, rz float64) {
 	qx = line.a.attributes[0]
 	qy = line.a.attributes[1]
+	qz = line.a.attributes[2]
 	rx = line.b.attributes[0]
 	ry = line.b.attributes[1]
+	rz = line.b.attributes[2]
 
 	return
 }
@@ -866,12 +868,12 @@ func swap(a, b *int) {
 
 // Geometry is some geometric form, comprised of vertices
 type Geometry struct {
-	vertices     []*Vertex
-	clippingFunc func(*Geometry, Port2D)
+	vertices  []*Vertex
+	baseColor RGBColor
 }
 
 // Draw draws this Geometry to the provided buffer
-func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
+func (geo Geometry) Draw(buffer *SoftFrameBuffer) {
 
 	// Draw the lines formws by the points of the geometry
 
@@ -891,8 +893,8 @@ func (geo *Geometry) Draw(buffer *SoftFrameBuffer) {
 }
 
 // Clip clips the geometry to the given port
-func (geo *Geometry) Clip(port Port2D) bool {
-	geo.clippingFunc(geo, port)
+func (geo Geometry) Clip(port Port2D) bool {
+	//geo.clippingFunc(geo, port)
 	return true
 }
 
@@ -998,16 +1000,17 @@ func getOrthogonalBitCode(vertex *Vertex, scene *Scene) (code int) {
 }
 
 // Discretize rounds all vertices of the geometry to integers
-func (geo *Geometry) Discretize() {
+func (geo Geometry) Discretize() {
 	for i, vertex := range geo.vertices {
-		for j, attr := range vertex.attributes {
-			rounded := round(attr)
+		// only round x and y
+		for j := 0; j < 2; j++ {
+			rounded := round(vertex.attributes[j])
 			geo.vertices[i].attributes[j] = float64(rounded)
 		}
 	}
 }
 
-func (geo *Geometry) sutherlandHodgemanClip(port Port2D) {
+func (geo Geometry) sutherlandHodgemanClip(port Port2D) {
 
 	// Our input points for this clipping edge
 	v := geo.vertices
@@ -1146,12 +1149,12 @@ func findIntersection(source, target *Line) *Vertex {
 }
 
 // AddVertex adds a vertex to the geometry
-func (geo *Geometry) AddVertex(vertex *Vertex) {
+func (geo Geometry) AddVertex(vertex *Vertex) {
 	geo.vertices = append(geo.vertices, vertex)
 }
 
 // Print prints the points in this Geometry
-func (geo *Geometry) Print() {
+func (geo Geometry) Print() {
 	for _, vertex := range geo.vertices {
 		fmt.Printf("%s\n", vertex.String())
 	}
@@ -1159,12 +1162,12 @@ func (geo *Geometry) Print() {
 
 // scanFill fills the Geometry with the scan technique.  Only meant for 2D
 // geometry
-func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
+func (geo Geometry) scanFill(buffer *SoftFrameBuffer, scene *Scene) {
 	extremas := &XSortedVertexSlice{}
 	// Scan every row in the buffer
-	for lineY := 0; lineY <= buffer.Height; lineY++ {
-		scanLine := CreateLine(Create2DVertex(0, float64(lineY)),
-			Create2DVertex(float64(buffer.Width), float64(lineY)))
+	for lineY := 0; lineY < buffer.Height; lineY++ {
+		scanLine := CreateLine(Create3DVertex(0, float64(lineY), 0),
+			Create3DVertex(float64(buffer.Width), float64(lineY), 0))
 
 		// Clear the extrema list
 		extremas.values = nil
@@ -1178,11 +1181,20 @@ func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 
 			// Find the intersection point of the scan line and this edge
 			intersection := findIntersection(edge, scanLine)
+			/*
+				if edge.a.attributes[2] != 0 ||
+					edge.b.attributes[2] != 0 {
+					fmt.Fprintf(os.Stderr, "%s\n", edge.String())
+				}
+			*/
 
 			// No intersection
 			if intersection == nil {
 				continue
 			}
+			// Interpolate the z value for the intersection
+			interpolateZ(edge.a, edge.b, intersection)
+
 			extremas.values =
 				append(extremas.values, intersection)
 		}
@@ -1198,9 +1210,30 @@ func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 		// Scan over the line
 		fill := false
 		extremeIdx := 0
-		for x := 0; x <= buffer.Width; x++ {
+
+		for x := 0; x < buffer.Width; x++ {
 			if fill {
-				buffer.WritePixel(x, lineY, color)
+				// Interpolate a Z value for this point if needed
+				if extremeIdx >= 1 && extremeIdx <= extremas.Len()-2 {
+					interpolateZ(extremas.values[extremeIdx+1], extremas.values[extremeIdx-1],
+						extremas.values[extremeIdx])
+				}
+				z := extremas.values[extremeIdx].attributes[2]
+				//fmt.Fprintf(os.Stderr, "%f\n", z)
+
+				var front, back float64
+				if scene.UseOrthographicProjection {
+					front = 0
+					back = -1
+				} else {
+					front = (scene.PRP.At(2, 0) - scene.FrontClippingPlane) /
+						(scene.BackClippingPlane - scene.PRP.At(2, 0))
+					back = -1
+				}
+				// Check and update the Z buffer
+				if buffer.updateZBuffer(x, lineY, z) {
+					buffer.writeDepthCueColor(z, front, back, x, lineY, geo.baseColor)
+				}
 			}
 			for extremeIdx < len(extremas.values) &&
 				x == round(extremas.values[extremeIdx].attributes[0]) {
@@ -1209,6 +1242,24 @@ func (geo *Geometry) scanFill(buffer *SoftFrameBuffer, color RGBColor) {
 			}
 		}
 	}
+}
+
+func interpolateZ(a, b, target *Vertex) {
+	z1 := a.attributes[2]
+	z2 := b.attributes[2]
+	y1 := a.attributes[1]
+	y2 := b.attributes[1]
+	yTarget := target.attributes[1]
+
+	var interpZ float64
+	// Check if z value for target vertex is already set
+	if target.attributes[2] != 0 {
+		interpZ = target.attributes[2]
+	} else {
+		interpZ = z1 - (z1-z2)*((y1-yTarget)/(y1-y2))
+	}
+	target.attributes[2] = interpZ
+
 }
 
 func isEdgeValid(edge *Line, scanY int) bool {
@@ -1252,6 +1303,7 @@ func (slice *XSortedVertexSlice) Swap(i, j int) {
 	slice.values[j] = temp
 }
 
+/*
 func parsePolygonObject(lines []string) ([]*Geometry, error) {
 	var res []*Geometry
 	toAdd := &Geometry{}
@@ -1325,6 +1377,7 @@ func parsePolygonObject(lines []string) ([]*Geometry, error) {
 
 	return res, nil
 }
+*/
 
 // File represents an input file that can be parsed for different input objects
 type File struct {
@@ -1373,12 +1426,12 @@ func (file *File) Close() {
 }
 
 // ParseSMFObjects parses objects from an SMF file
-func (file *SMFFile) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
+func (file *SMFFile) ParseSMFObjects() ([]Geometry, []*Vertex, error) {
 	scanner := file.Fp.scanner
 	var err error
 	// Vertex indices must begin at 1
 	vertices := []*Vertex{nil}
-	var polygons []*Geometry
+	var polygons []Geometry
 	for scanner.Scan() {
 		line := scanner.Text()
 		tokens := strings.Fields(line)
@@ -1406,7 +1459,7 @@ func (file *SMFFile) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 			vertices = append(vertices, vertex)
 
 		} else if tokens[0] == file.faceDelim {
-			geo := &Geometry{}
+			geo := Geometry{}
 			if len(tokens) < 4 {
 				err = fmt.Errorf("Line %d: A face needs at least three"+
 					" vertices", file.Fp.lineIdx)
@@ -1431,6 +1484,9 @@ func (file *SMFFile) ParseSMFObjects() ([]*Geometry, []*Vertex, error) {
 			// Add the "closing" vertex
 			closing := geo.vertices[0]
 			geo.vertices = append(geo.vertices, closing)
+
+			// Set the base color
+			geo.baseColor = file.BaseColor
 
 			polygons = append(polygons, geo)
 			//geo.Print()
@@ -1508,7 +1564,7 @@ func (file *XPMFile) WriteSoftBuffer(buffer *SoftFrameBuffer) error {
 
 	// Put it all together
 	fileStr := fmt.Sprintf(file.XPMFileFormatStr, buffer.Width,
-		buffer.Height, len(buffer.colors), 1, colorList, rowsList.String())
+		buffer.Height, len(buffer.colors), 3, colorList, rowsList.String())
 
 	_, err := file.writer.WriteString(fileStr)
 	file.writer.Flush()
