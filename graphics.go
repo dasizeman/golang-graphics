@@ -72,7 +72,14 @@ func (frameBuffer *SoftFrameBuffer) writeDepthCueColor(z, front, back float64, x
 	scale := (z - back) / (front - back)
 
 	// Scale the base color
+	if x == 400 {
+		//fmt.Println()
+	}
 	scaledColor := scaleColor(baseColor, scale)
+	if y == 233 && scaledColor.R == 7 {
+		//fmt.Printf("%d,%d,%d\n", scaledColor.R, scaledColor.G, scaledColor.B)
+		//fmt.Printf("%f\n", z)
+	}
 
 	// Write the pixel
 	frameBuffer.WritePixel(x, y, scaledColor)
@@ -99,9 +106,9 @@ func get20ColorXPMCode(color RGBColor) string {
 
 func scaleColor(color RGBColor, scale float64) RGBColor {
 	return RGBColor{
-		byte(float64(color.R) / scale),
-		byte(float64(color.G) / scale),
-		byte(float64(color.B) / scale)}
+		byte(float64(color.R) * scale),
+		byte(float64(color.G) * scale),
+		byte(float64(color.B) * scale)}
 }
 
 func (frameBuffer *SoftFrameBuffer) updateZBuffer(x, y int, z float64) bool {
@@ -509,7 +516,6 @@ func GetRotationTransformMatrix(deg int) mat64.Matrix {
 func GetPerspectiveProjectionMatrix(PRP *mat64.Vector, ViewPlane Port2D,
 	back float64) mat64.Matrix {
 
-	fmt.Println("Perspective\n")
 	polygons := mat64.NewDense(4, 4, nil)
 	PRPx := PRP.At(0, 0)
 	PRPy := PRP.At(1, 0)
@@ -1193,7 +1199,7 @@ func (geo Geometry) scanFill(buffer *SoftFrameBuffer, scene *Scene) {
 				continue
 			}
 			// Interpolate the z value for the intersection
-			interpolateZ(edge.a, edge.b, intersection)
+			interpolateEdgeZ(edge.a, edge.b, intersection)
 
 			extremas.values =
 				append(extremas.values, intersection)
@@ -1213,12 +1219,14 @@ func (geo Geometry) scanFill(buffer *SoftFrameBuffer, scene *Scene) {
 
 		for x := 0; x < buffer.Width; x++ {
 			if fill {
+				interpolatedPt := Create3DVertex(float64(x), float64(lineY), 0)
 				// Interpolate a Z value for this point if needed
-				if extremeIdx >= 1 && extremeIdx <= extremas.Len()-2 {
-					interpolateZ(extremas.values[extremeIdx+1], extremas.values[extremeIdx-1],
-						extremas.values[extremeIdx])
+				if extremeIdx >= 1 {
+					interpolateScanlineZ(extremas.values[extremeIdx], extremas.values[extremeIdx-1],
+						interpolatedPt)
 				}
-				z := extremas.values[extremeIdx].attributes[2]
+				z := interpolatedPt.attributes[2]
+				//fmt.Printf("%f\n", z)
 				//fmt.Fprintf(os.Stderr, "%f\n", z)
 
 				var front, back float64
@@ -1244,7 +1252,7 @@ func (geo Geometry) scanFill(buffer *SoftFrameBuffer, scene *Scene) {
 	}
 }
 
-func interpolateZ(a, b, target *Vertex) {
+func interpolateEdgeZ(a, b, target *Vertex) {
 	z1 := a.attributes[2]
 	z2 := b.attributes[2]
 	y1 := a.attributes[1]
@@ -1257,6 +1265,23 @@ func interpolateZ(a, b, target *Vertex) {
 		interpZ = target.attributes[2]
 	} else {
 		interpZ = z1 - (z1-z2)*((y1-yTarget)/(y1-y2))
+	}
+	target.attributes[2] = interpZ
+
+}
+func interpolateScanlineZ(a, b, target *Vertex) {
+	za := a.attributes[2]
+	zb := b.attributes[2]
+	xa := a.attributes[0]
+	xb := b.attributes[0]
+	xp := target.attributes[0]
+
+	var interpZ float64
+	// Check if z value for target vertex is already set
+	if target.attributes[2] != 0 {
+		interpZ = target.attributes[2]
+	} else {
+		interpZ = zb - (zb-za)*((xb-xp)/(xb-xa))
 	}
 	target.attributes[2] = interpZ
 
