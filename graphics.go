@@ -208,7 +208,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	finalMatrix.Mul(projectionMatrix, viewMatrix)
 
 	// Transform the viewport for all vertices
-	for _, vertex := range scene.Vertices[1:] {
+	for _, vertex := range scene.Vertices {
 		// Create a column vector from the vertex
 		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
@@ -226,7 +226,7 @@ func (scene *Scene) Render(buffer *SoftFrameBuffer) {
 	}
 
 	// Project all the vertices
-	for _, vertex := range scene.Vertices[1:] {
+	for _, vertex := range scene.Vertices {
 		// Create a column vector from the vertex
 		vector := mat64.NewVector(len(vertex.attributes), vertex.attributes)
 
@@ -1454,11 +1454,15 @@ func (file *File) Close() {
 func (file *SMFFile) ParseSMFObjects() ([]Geometry, []*Vertex, error) {
 	scanner := file.Fp.scanner
 	var err error
-	// Vertex indices must begin at 1
-	vertices := []*Vertex{nil}
+	vertices := []*Vertex{}
 	var polygons []Geometry
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Ignore blank lines
+		if strings.Trim(line, " ") == "" {
+			continue
+		}
 		tokens := strings.Fields(line)
 
 		if len(tokens) < 1 {
@@ -1491,19 +1495,24 @@ func (file *SMFFile) ParseSMFObjects() ([]Geometry, []*Vertex, error) {
 				break
 			}
 			for i := 1; i < len(tokens); i++ {
-				vidx, err := strconv.Atoi(tokens[i])
+				var vidx int
+				vidx, err = strconv.Atoi(tokens[i])
 				if err != nil {
 					break
 				}
-				if vidx < 0 || vidx >= len(vertices) {
+				if vidx < 1 || vidx > len(vertices) {
 					err = fmt.Errorf("Line %d: Invalid vertex index", file.Fp.lineIdx)
 					break
 				}
-				geo.vertices = append(geo.vertices, vertices[vidx])
+				geo.vertices = append(geo.vertices, vertices[vidx-1]) // index starts at 1 in file
 			}
 
 			if err != nil {
 				break
+			}
+
+			if len(geo.vertices) < 1 {
+				fmt.Println()
 			}
 
 			// Add the "closing" vertex
